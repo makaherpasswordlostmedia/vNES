@@ -7,3 +7,5 @@ It has now disappeared from its original location, virtualnes.com, but I have pi
 If you're looking for the actual README, [version 2.13 has one](https://github.com/bfirsh/vNES/blob/2.13/README).
 
 [JSNES](https://github.com/bfirsh/jsnes) is based on this emulator.
+
+port to j2me by sheva
