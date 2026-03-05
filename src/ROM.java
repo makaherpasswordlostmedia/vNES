@@ -16,7 +16,6 @@ this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 import java.io.*;
-import javax.swing.JOptionPane;
 
 public class ROM {
 
@@ -45,7 +44,6 @@ public class ROM {
     boolean fourScreen;
     int mapperType;
     String fileName;
-    RandomAccessFile raFile;
     boolean enableSave = true;
     boolean valid;
     static String[] mapperName;

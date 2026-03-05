@@ -1,49 +1,33 @@
 /*
-vNES
-Copyright © 2006-2013 Open Emulation Project
-
-This program is free software: you can redistribute it and/or modify it under
-the terms of the GNU General Public License as published by the Free Software
-Foundation, either version 3 of the License, or (at your option) any later
-version.
-
-This program is distributed in the hope that it will be useful, but WITHOUT ANY
-WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
-PARTICULAR PURPOSE.  See the GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License along with
-this program.  If not, see <http://www.gnu.org/licenses/>.
+ * Globals.java — J2ME version: HashMap replaced with Hashtable
  */
-
-import java.util.*;
+import java.util.Hashtable;
 
 public class Globals {
 
     public static double CPU_FREQ_NTSC = 1789772.5d;
-    public static double CPU_FREQ_PAL = 1773447.4d;
+    public static double CPU_FREQ_PAL  = 1773447.4d;
     public static int preferredFrameRate = 60;
-    
-    // Microseconds per frame:
     public static int frameTime = 1000000 / preferredFrameRate;
-    // What value to flush memory with on power-up:
     public static short memoryFlushValue = 0xFF;
 
-    public static final boolean debug = true;
-    public static final boolean fsdebug = false;
+    public static final boolean debug      = false;
+    public static final boolean fsdebug   = false;
 
-    public static boolean appletMode = true;
-    public static boolean disableSprites = false;
-    public static boolean timeEmulation = true;
-    public static boolean palEmulation;
-    public static boolean enableSound = true;
-    public static boolean focused = false;
+    public static boolean appletMode       = true;
+    public static boolean disableSprites   = false;
+    public static boolean timeEmulation    = true;
+    public static boolean palEmulation     = false;
+    public static boolean enableSound      = false; // disabled on J2ME
+    public static boolean focused          = true;
 
-    public static HashMap keycodes = new HashMap(); //Java key codes
-    public static HashMap controls = new HashMap(); //vNES controls codes
+    // Kept for API compat (used nowhere in J2ME build)
+    public static Hashtable keycodes = new Hashtable();
+    public static Hashtable controls = new Hashtable();
 
     public static NES nes;
 
     public static void println(String s) {
-        nes.getGui().println(s);
+        if (nes != null) nes.getGui().println(s);
     }
 }

@@ -15,7 +15,6 @@ You should have received a copy of the GNU General Public License along with
 this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-import java.awt.*;
 import java.io.*;
 
 public class PaletteTable {
@@ -170,7 +169,7 @@ public class PaletteTable {
     public int RGBtoHSL(int r, int g, int b) {
 
         float[] hsbvals = new float[3];
-        hsbvals = Color.RGBtoHSB(b, g, r, hsbvals);
+        hsbvals = rgbToHSB(b, g, r);
         hsbvals[0] -= Math.floor(hsbvals[0]);
 
         int ret = 0;
@@ -189,7 +188,7 @@ public class PaletteTable {
     }
 
     public int HSLtoRGB(int h, int s, int l) {
-        return Color.HSBtoRGB(h / 255.0f, s / 255.0f, l / 255.0f);
+        return hsbToRGB(h / 255.0f, s / 255.0f, l / 255.0f);
     }
 
     public int HSLtoRGB(int hsl) {
@@ -198,7 +197,7 @@ public class PaletteTable {
         h = (float) (((hsl >> 16) & 0xFF) / 255d);
         s = (float) (((hsl >> 8) & 0xFF) / 255d);
         l = (float) (((hsl) & 0xFF) / 255d);
-        return Color.HSBtoRGB(h, s, l);
+        return hsbToRGB(h, s, l);
 
     }
 
@@ -400,4 +399,48 @@ public class PaletteTable {
         updatePalette();
 
     }
+
+    // --- J2ME replacements for java.awt.Color HSB/RGB conversions ---
+
+    private float[] hsbvals = new float[3];
+
+    private float[] rgbToHSB(int r, int g, int b) {
+        float fr = r / 255.0f, fg = g / 255.0f, fb = b / 255.0f;
+        float max = fr > fg ? (fr > fb ? fr : fb) : (fg > fb ? fg : fb);
+        float min = fr < fg ? (fr < fb ? fr : fb) : (fg < fb ? fg : fb);
+        float delta = max - min;
+        float h = 0, s = (max == 0) ? 0 : delta / max, v = max;
+        if (delta != 0) {
+            if (max == fr) h = ((fg - fb) / delta) % 6;
+            else if (max == fg) h = (fb - fr) / delta + 2;
+            else h = (fr - fg) / delta + 4;
+            h /= 6;
+            if (h < 0) h += 1;
+        }
+        hsbvals[0] = h; hsbvals[1] = s; hsbvals[2] = v;
+        return hsbvals;
+    }
+
+    private int hsbToRGB(float h, float s, float b) {
+        if (s == 0) {
+            int v = (int)(b * 255);
+            return 0xFF000000 | (v << 16) | (v << 8) | v;
+        }
+        int i = (int)(h * 6);
+        float f = h * 6 - i;
+        float p = b * (1 - s);
+        float q = b * (1 - f * s);
+        float t = b * (1 - (1 - f) * s);
+        float r, g, bl2;
+        switch (i % 6) {
+            case 0: r=b;  g=t;  bl2=p; break;
+            case 1: r=q;  g=b;  bl2=p; break;
+            case 2: r=p;  g=b;  bl2=t; break;
+            case 3: r=p;  g=q;  bl2=b; break;
+            case 4: r=t;  g=p;  bl2=b; break;
+            default: r=b; g=p;  bl2=q; break;
+        }
+        return 0xFF000000 | ((int)(r*255) << 16) | ((int)(g*255) << 8) | (int)(bl2*255);
+    }
+
 }

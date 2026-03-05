@@ -1,128 +1,61 @@
 /*
-vNES
-Copyright © 2006-2013 Open Emulation Project
-
-This program is free software: you can redistribute it and/or modify it under
-the terms of the GNU General Public License as published by the Free Software
-Foundation, either version 3 of the License, or (at your option) any later
-version.
-
-This program is distributed in the hope that it will be useful, but WITHOUT ANY
-WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
-PARTICULAR PURPOSE.  See the GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License along with
-this program.  If not, see <http://www.gnu.org/licenses/>.
+ * FileLoader.java — J2ME version
+ * Loads ROM only from JAR resources (getResourceAsStream).
+ * No FileInputStream, no zip support (not available on all J2ME devices).
  */
-
 import java.io.*;
-import java.util.zip.*;
 
 public class FileLoader {
 
-    // Load a file.
     public short[] loadFile(String fileName, UI ui) {
 
-        int flen;
-        byte[] tmp = new byte[2048];
-
-        // Read file:
+        InputStream in = null;
         try {
-
-            InputStream in;
-            in = getClass().getResourceAsStream(fileName);
-
+            // Load from JAR resources only (J2ME: no local file system access)
+            in = getClass().getResourceAsStream("/" + fileName);
             if (in == null) {
-
-                // Try another approach.
-                in = new FileInputStream(fileName);
-                if (in == null) {
-                    throw new IOException("Unable to load " + fileName);
-                }
-
+                in = getClass().getResourceAsStream(fileName);
             }
-            ZipInputStream zis = null;
-            boolean zip = false;
+            if (in == null) {
+                System.out.println("FileLoader: cannot find " + fileName);
+                return null;
+            }
 
+            // Read all bytes
+            byte[] tmp = new byte[4096];
             int pos = 0;
-            int readbyte = 0;
 
-            if (!(in instanceof FileInputStream)) {
-
-
-                long total = -1;
-
-                if (fileName.endsWith(".zip")) {
-                    zis = new ZipInputStream(in);
-                    ZipEntry entry = zis.getNextEntry();
-                    total = entry.getSize();
-                    zip = true;
-                } else if (Globals.appletMode && ui != null) {
-                    // Can't get the file size, so use the applet parameter
-                    total = ui.getRomFileSize();
+            int readbyte;
+            while ((readbyte = in.read(tmp, pos, tmp.length - pos)) != -1) {
+                pos += readbyte;
+                if (pos >= tmp.length) {
+                    byte[] bigger = new byte[tmp.length + 32768];
+                    for (int i = 0; i < tmp.length; i++) bigger[i] = tmp[i];
+                    tmp = bigger;
                 }
-
-                long progress = -1;
-                while (readbyte != -1) {
-                    readbyte = zip ? zis.read(tmp, pos, tmp.length - pos) : in.read(tmp, pos, tmp.length - pos);
-                    if (readbyte != -1) {
-                        if (pos >= tmp.length) {
-                            byte[] newtmp = new byte[tmp.length + 32768];
-                            for (int i = 0; i < tmp.length; i++) {
-                                newtmp[i] = tmp[i];
-                            }
-                            tmp = newtmp;
-                        }
-                        pos += readbyte;
-                    }
-
-                    if (total > 0 && ((pos * 100) / total) > progress) {
-                        progress = (pos * 100) / total;
-                        if (ui != null) {
-                            ui.showLoadProgress((int) progress);
-                        }
-                    }
-
+                if (ui != null) {
+                    // rough progress estimate (assumes ~512KB max)
+                    int pct = (pos * 100) / 524288;
+                    if (pct > 100) pct = 99;
+                    ui.showLoadProgress(pct);
                 }
-
-            } else {
-
-                // This is easy, can find the file size since it's
-                // in the local file system.
-                File f = new File(fileName);
-                int count = 0;
-                int total = (int) (f.length());
-                tmp = new byte[total];
-                while (count < total) {
-                    count += in.read(tmp, count, total - count);
-                }
-                pos = total;
-
             }
 
-            // Put into array without any padding:
-            byte[] newtmp = new byte[pos];
+            // Trim to actual size
+            short[] ret = new short[pos];
             for (int i = 0; i < pos; i++) {
-                newtmp[i] = tmp[i];
+                ret[i] = (short)(tmp[i] & 0xFF);
             }
-            tmp = newtmp;
+            if (ui != null) ui.showLoadProgress(100);
+            return ret;
 
-            // File size:
-            flen = tmp.length;
-
-        } catch (IOException ioe) {
-
-            // Something went wrong.
-            ioe.printStackTrace();
+        } catch (IOException e) {
+            System.out.println("FileLoader IOException: " + e.getMessage());
             return null;
-
+        } finally {
+            if (in != null) {
+                try { in.close(); } catch (IOException e) {}
+            }
         }
-
-        short[] ret = new short[flen];
-        for (int i = 0; i < flen; i++) {
-            ret[i] = (short) (tmp[i] & 255);
-        }
-        return ret;
-
     }
 }

@@ -213,7 +213,6 @@ public final class CPU implements Runnable{
 	// Emulates cpu instructions until stopped.
 	public void emulate(){
 
-
 		// NES Memory
 		// (when memory mappers switch ROM banks
 		// this will be written to, no need to

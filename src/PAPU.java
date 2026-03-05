@@ -15,14 +15,13 @@ You should have received a copy of the GNU General Public License along with
 this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-import javax.sound.sampled.*;
 
 public final class PAPU {
 
     NES nes;
     Memory cpuMem;
-    Mixer mixer;
-    SourceDataLine line;
+    // Sound output stubbed for J2ME
+    Object line = null;
     ChannelSquare square1;
     ChannelSquare square2;
     ChannelTriangle triangle;
@@ -145,37 +144,8 @@ public final class PAPU {
     }
 
     public synchronized void start() {
-
-        //System.out.println("* Starting PAPU lines.");
-        if (line != null && line.isActive()) {
-            //System.out.println("* Already running.");
-            return;
-        }
-
-        bufferIndex = 0;
-        Mixer.Info[] mixerInfo = AudioSystem.getMixerInfo();
-
-        if (mixerInfo == null || mixerInfo.length == 0) {
-            //System.out.println("No audio mixer available, sound disabled.");
-            Globals.enableSound = false;
-            return;
-        }
-
-        mixer = AudioSystem.getMixer(mixerInfo[1]);
-
-        AudioFormat audioFormat = new AudioFormat(sampleRate, 16, (stereo ? 2 : 1), true, false);
-        DataLine.Info info = new DataLine.Info(SourceDataLine.class, audioFormat, sampleRate);
-
-        try {
-
-            line = (SourceDataLine) AudioSystem.getLine(info);
-            line.open(audioFormat);
-            line.start();
-
-        } catch (Exception e) {
-            //System.out.println("Couldn't get sound lines.");
-        }
-
+        // Sound output not available on J2ME
+        Globals.enableSound = false;
     }
 
     public NES getNes() {
@@ -703,33 +673,12 @@ public final class PAPU {
     }
 
 
-    // Writes the sound buffer to the output line:
     public void writeBuffer() {
-
-        if (line == null) {
-            return;
-        }
-        bufferIndex -= (bufferIndex % (stereo ? 4 : 2));
-        line.write(sampleBuffer, 0, bufferIndex);
-
-        bufferIndex = 0;
-
+        bufferIndex = 0; // J2ME: no audio output
     }
 
     public void stop() {
-
-        if (line == null) {
-            // No line to close. Probably lack of sound card.
-            return;
-        }
-
-        if (line != null && line.isOpen() && line.isActive()) {
-            line.close();
-        }
-
-        // Lose line:
-        line = null;
-
+        line = null; // J2ME stub
     }
 
     public int getSampleRate() {
@@ -911,27 +860,16 @@ public final class PAPU {
 
     }
 
-    public SourceDataLine getLine() {
-        return line;
+    public Object getLine() {
+        return null;
     }
 
     public boolean isRunning() {
-        return (line != null && line.isActive());
+        return false; // J2ME: no sound
     }
 
     public int getMillisToAvailableAbove(int target_avail) {
-
-        double time;
-        int cur_avail;
-        if ((cur_avail = line.available()) >= target_avail) {
-            return 0;
-        }
-
-        time = ((target_avail - cur_avail) * 1000) / sampleRate;
-        time /= (stereo ? 4 : 2);
-
-        return (int) time;
-
+        return 0; // J2ME stub
     }
 
     public int getBufferPos() {
@@ -1080,7 +1018,6 @@ public final class PAPU {
         noise = null;
         dmc = null;
 
-        mixer = null;
         line = null;
 
     }

@@ -193,6 +193,11 @@ public class PPU {
             oldFrame[i] = -1;
         }
 
+        // Grab screen buffer from UI (J2ME port)
+        if (nes != null && nes.gui != null && nes.gui.getScreenView() != null) {
+            buffer = nes.gui.getScreenView().getBuffer();
+        }
+
     }
 
 
@@ -588,8 +593,8 @@ public class PPU {
         // Show sound buffer:
         if (showSoundBuffer && nes.getPapu().getLine() != null) {
 
-            bufferSize = nes.getPapu().getLine().getBufferSize();
-            available = nes.getPapu().getLine().available();
+            bufferSize = 2048; // J2ME stub
+            available = 2048; // J2ME stub
             scale = bufferSize / 256;
 
             for (int y = 0; y < 4; y++) {
