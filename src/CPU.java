@@ -255,7 +255,7 @@ public final class CPU implements Runnable{
 		int add;
 
 		boolean palEmu = Globals.palEmulation;
-		boolean emulateSound = Globals.enableSound;
+		boolean emulateSound = true; // always clock PAPU, it checks enableSound internally
 		boolean asApplet = Globals.appletMode;
 		stopRunning = false;
 

@@ -18,7 +18,7 @@ public class Globals {
     public static boolean disableSprites   = false;
     public static boolean timeEmulation    = true;
     public static boolean palEmulation     = false;
-    public static boolean enableSound      = false; // disabled on J2ME
+    public static boolean enableSound      = true;
     public static boolean focused          = true;
 
     // Kept for API compat (used nowhere in J2ME build)

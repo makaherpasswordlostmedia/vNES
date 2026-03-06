@@ -75,9 +75,9 @@ public class NESCanvas extends Canvas implements UI, InputHandler, Runnable {
         screenView = new BufferView(nes, NES_W, NES_H);
         screenView.setCanvas(this);
 
-        // Disable sound for J2ME (stub)
-        Globals.enableSound = false;
-        nes.enableSound(false);
+        // Enable sound via javax.sound.sampled
+        Globals.enableSound = true;
+        nes.enableSound(true);
 
         nes.reset();
 

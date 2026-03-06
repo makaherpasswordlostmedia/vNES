@@ -144,8 +144,7 @@ public final class PAPU {
     }
 
     public synchronized void start() {
-        // Sound output not available on J2ME
-        Globals.enableSound = false;
+        if (audioLine == null && !audioInitFailed) initAudio();
     }
 
     public NES getNes() {
@@ -670,15 +669,86 @@ public final class PAPU {
         smpTriangle = 0;
         smpDmc = 0;
 
+        // Flush to audio output when buffer is full
+        if (bufferIndex >= sampleBuffer.length - 4) {
+            writeBuffer();
+        }
+
     }
 
 
+    // Audio output via javax.sound.sampled (available in J2ME Loader)
+    private Object audioLine = null;
+    private boolean audioInitFailed = false;
+
+    private void initAudio() {
+        if (audioInitFailed) return;
+        try {
+            // Use Android AudioTrack via reflection
+            Class atClass = Class.forName("android.media.AudioTrack");
+
+            // AudioFormat constants: ENCODING_PCM_16BIT=2, CHANNEL_OUT_STEREO=12, CHANNEL_OUT_MONO=4
+            int channelConfig = stereo ? 12 : 4;
+            int encoding = 2; // PCM_16BIT
+
+            // getMinBufferSize(sampleRate, channelConfig, audioFormat)
+            java.lang.reflect.Method getMin = atClass.getMethod("getMinBufferSize",
+                new Class[]{int.class, int.class, int.class});
+            int minBuf = ((Integer) getMin.invoke(null,
+                new Object[]{new Integer(sampleRate), new Integer(channelConfig), new Integer(encoding)})).intValue();
+            if (minBuf < 0) minBuf = 4096;
+            int bufSize = Math.max(minBuf * 2, sampleBuffer.length);
+
+            // AudioTrack(streamType=3, sampleRate, channelConfig, audioFormat, bufferSize, mode=1)
+            // STREAM_MUSIC=3, MODE_STREAM=1
+            audioLine = atClass.getConstructor(new Class[]{
+                int.class, int.class, int.class, int.class, int.class, int.class
+            }).newInstance(new Object[]{
+                new Integer(3), new Integer(sampleRate),
+                new Integer(channelConfig), new Integer(encoding),
+                new Integer(bufSize), new Integer(1)
+            });
+
+            atClass.getMethod("play", new Class[0]).invoke(audioLine, new Object[0]);
+            System.out.println("PAPU: AudioTrack init OK rate=" + sampleRate + " buf=" + bufSize);
+        } catch (Exception e) {
+            System.out.println("PAPU: AudioTrack init failed: " + e);
+            audioInitFailed = true;
+            audioLine = null;
+        }
+    }
+
+    private int writeCallCount = 0;
     public void writeBuffer() {
-        bufferIndex = 0; // J2ME: no audio output
+        if (!Globals.enableSound) { bufferIndex = 0; return; }
+        if (audioLine == null && !audioInitFailed) initAudio();
+        writeCallCount++;
+        if (writeCallCount <= 3) {
+            System.out.println("PAPU: writeBuffer called bufferIndex=" + bufferIndex + " audioLine=" + (audioLine != null));
+        }
+        if (audioLine != null && bufferIndex > 0) {
+            try {
+                Object ret = audioLine.getClass().getMethod("write",
+                    new Class[]{byte[].class, int.class, int.class})
+                    .invoke(audioLine, new Object[]{sampleBuffer, Integer.valueOf(0), Integer.valueOf(bufferIndex)});
+                if (writeCallCount <= 3) System.out.println("PAPU: write ret=" + ret);
+            } catch (Exception e) {
+                System.out.println("PAPU: write error: " + e);
+            }
+        }
+        bufferIndex = 0;
     }
 
     public void stop() {
-        line = null; // J2ME stub
+        if (audioLine != null) {
+            try {
+                audioLine.getClass().getMethod("pause", new Class[0]).invoke(audioLine, new Object[0]);
+                audioLine.getClass().getMethod("flush", new Class[0]).invoke(audioLine, new Object[0]);
+                audioLine.getClass().getMethod("release", new Class[0]).invoke(audioLine, new Object[0]);
+            } catch (Exception e) {}
+            audioLine = null;
+        }
+        line = null;
     }
 
     public int getSampleRate() {
@@ -865,7 +935,7 @@ public final class PAPU {
     }
 
     public boolean isRunning() {
-        return false; // J2ME: no sound
+        return audioLine != null || audioInitFailed;
     }
 
     public int getMillisToAvailableAbove(int target_avail) {
