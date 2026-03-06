@@ -193,9 +193,9 @@ public class PPU {
             oldFrame[i] = -1;
         }
 
-        // Grab screen buffer from UI (J2ME port)
+        // Grab back buffer from UI (J2ME port - double buffering)
         if (nes != null && nes.gui != null && nes.gui.getScreenView() != null) {
-            buffer = nes.gui.getScreenView().getBuffer();
+            buffer = nes.gui.getScreenView().getBackBuffer();
         }
 
     }
@@ -352,7 +352,7 @@ public class PPU {
 
         // Make sure everything is rendered:
         if (lastRenderedScanline < 239) {
-            renderFramePartially(nes.gui.getScreenView().getBuffer(), lastRenderedScanline + 1, 240 - lastRenderedScanline);
+            renderFramePartially(nes.gui.getScreenView().getBackBuffer(), lastRenderedScanline + 1, 240 - lastRenderedScanline);
         }
 
         endFrame();
@@ -477,7 +477,7 @@ public class PPU {
 
     public void startFrame() {
 
-        int[] buffer = nes.getGui().getScreenView().getBuffer();
+        int[] buffer = nes.getGui().getScreenView().getBackBuffer();
 
         // Set background color:
         int bgColor = 0;
@@ -535,7 +535,7 @@ public class PPU {
 
     public void endFrame() {
 
-        int[] buffer = nes.getGui().getScreenView().getBuffer();
+        int[] buffer = nes.getGui().getScreenView().getBackBuffer();
 
         // Draw spr#0 hit coordinates:
         if (showSpr0Hit) {
@@ -1168,7 +1168,7 @@ public class PPU {
 
     private void renderSpritesPartially(int startscan, int scancount, boolean bgPri) {
 
-        buffer = nes.getGui().getScreenView().getBuffer();
+        buffer = nes.getGui().getScreenView().getBackBuffer();
         if (f_spVisibility == 1) {
 
             int sprT1, sprT2;

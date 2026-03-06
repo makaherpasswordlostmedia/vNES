@@ -68,31 +68,32 @@ public class PaletteTable {
 
             } else {
 
-                // Read text file with hex codes.
+                // Read text file with hex codes (CLDC-compatible, no BufferedReader).
                 InputStream fStr = getClass().getResourceAsStream(file);
-                InputStreamReader isr = new InputStreamReader(fStr);
-                BufferedReader br = new BufferedReader(isr);
-
-                String line = br.readLine();
-                String hexR, hexG, hexB;
+                // Read all bytes
+                byte[] data = new byte[fStr.available()];
+                fStr.read(data);
+                fStr.close();
+                // Parse line by line manually
                 int palIndex = 0;
-                while (line != null) {
-
-                    if (line.startsWith("#")) {
-
-                        hexR = line.substring(1, 3);
-                        hexG = line.substring(3, 5);
-                        hexB = line.substring(5, 7);
-
-                        r = Integer.decode("0x" + hexR).intValue();
-                        g = Integer.decode("0x" + hexG).intValue();
-                        b = Integer.decode("0x" + hexB).intValue();
-                        origTable[palIndex] = r | (g << 8) | (b << 16);
-
-                        palIndex++;
-
+                int pos = 0;
+                while (pos < data.length && palIndex < 64) {
+                    // Find end of line
+                    int end = pos;
+                    while (end < data.length && data[end] != '\n' && data[end] != '\r') end++;
+                    if (end > pos) {
+                        String line = new String(data, pos, end - pos).trim();
+                        if (line.startsWith("#") && line.length() >= 7) {
+                            r = Integer.parseInt(line.substring(1, 3), 16);
+                            g = Integer.parseInt(line.substring(3, 5), 16);
+                            b = Integer.parseInt(line.substring(5, 7), 16);
+                            origTable[palIndex] = r | (g << 8) | (b << 16);
+                            palIndex++;
+                        }
                     }
-                    line = br.readLine();
+                    // Skip line ending
+                    while (end < data.length && (data[end] == '\n' || data[end] == '\r')) end++;
+                    pos = end;
                 }
             }
 
