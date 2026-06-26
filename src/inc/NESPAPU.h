@@ -1,7 +1,7 @@
 /*
  * NESPAPU.h — Аналог PAPU.java
  * Эмулятор аудиопроцессора (pseudo-APU) Ricoh 2A03.
- * На Symbian используется CMdaAudioOutputStream для вывода звука.
+ * На Qt/Symbian^3 используется QAudioOutput для вывода звука.
  *
  * Каналы: 2 × Square, 1 × Triangle, 1 × Noise, 1 × DMC
  */
@@ -10,8 +10,9 @@
 #define NESPAPU_H
 
 #include "NESTypes.h"
-#include <MdaAudioOutputStream.h>
-#include <MdaAudioSampleEditor.h>
+#include <QAudioOutput>
+#include <QIODevice>
+#include <QObject>
 
 class CNESCPU;
 
@@ -153,8 +154,7 @@ private:
 // ---------------------------------------------------------------------------
 // Главный класс APU
 // ---------------------------------------------------------------------------
-class CNESPAPU : public CBase,
-                 public MMdaAudioOutputStreamCallback
+class CNESPAPU : public QObject, public CBase
 {
 public:
     static CNESPAPU* NewLC(CNESCPU* aCpu);
@@ -175,10 +175,8 @@ public:
     void SetSampleRate(TInt aRate);
     TInt SampleRate() const { return iSampleRate; }
 
-    // MMdaAudioOutputStreamCallback
-    void MaoscOpenComplete(TInt aError) override;
-    void MaoscBufferCopied(TInt aError, const TDesC8& aBuffer) override;
-    void MaoscPlayComplete(TInt aError) override;
+    // Qt audio
+    void initAudio();
 
     void StateSave(RWriteStream& aStream) const;
     void StateLoad(RReadStream&  aStream);
@@ -198,23 +196,19 @@ private:
 
     TBool  iRunning;
     TInt   iSampleRate;
-    TInt   iCyclesPerSample;   // CPU cycles per output sample
-    TInt   iCycleAcc;          // accumulator
+    TInt   iCyclesPerSample;
+    TInt   iCycleAcc;
 
-    // Frame-sequencer (240 Hz / 192 Hz mode)
     TInt   iFrameCounter;
     TBool  i5StepMode;
     TBool  iIRQInhibit;
 
-    // Аудио буферы (двойная буферизация)
     s16    iAudioBuf[2][KAudioBufSamples];
-    TInt   iBufWrite;   // индекс буфера для записи
-    TInt   iBufPos;     // позиция в текущем буфере
+    TInt   iBufWrite;
+    TInt   iBufPos;
 
-    CMdaAudioOutputStream* iOutputStream;
-    TMdaAudioDataSettings  iSettings;
-    TBuf8<KAudioBufSamples * 2> iPlayBuf;
-    TBool  iStreamOpen;
+    QAudioOutput* iAudioOutput;
+    QIODevice*    iAudioDevice;
 };
 
 #endif // NESPAPU_H
