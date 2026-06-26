@@ -1,10 +1,11 @@
 /*
  * NESPAPU.cpp — Аналог PAPU.java
  * APU: Square×2, Triangle, Noise, DMC + frame sequencer.
- * Вывод звука через CMdaAudioOutputStream (Symbian Media Framework).
+ * Вывод звука через QAudioOutput (Qt Multimedia).
  */
 #include "NESPAPU.h"
 #include "NESCPU.h"
+#include <QAudioFormat>
 #include <e32math.h>
 
 // Таблицы периодов каналов (NTSC)
@@ -311,27 +312,31 @@ void CNESPAPU::ConstructL(CNESCPU* aCpu)
     iDMC   = new (ELeave) CNESDMCChannel();
     iDMC->SetCPU(aCpu);
 
-    // CPU такты на один выходной сэмпл
-    // 1789773 Hz / 44100 Hz ≈ 40.6 → округлим до 41
-    iCyclesPerSample = 41;
+    iCyclesPerSample = 41; // 1789773 / 44100
 
-    // Открыть аудиопоток
-    iOutputStream = CMdaAudioOutputStream::NewL(*this);
-    iSettings.iSampleRate = TMdaAudioDataSettings::ESampleRate44100Hz;
-    iSettings.iChannels   = TMdaAudioDataSettings::EChannelsMono;
-    iOutputStream->Open(&iSettings);
-    // Реальный старт — в MaoscOpenComplete
+    initAudio();
+}
+
+void CNESPAPU::initAudio()
+{
+    QAudioFormat fmt;
+    fmt.setSampleRate(KSampleRate);
+    fmt.setChannelCount(1);
+    fmt.setSampleSize(16);
+    fmt.setCodec("audio/pcm");
+    fmt.setByteOrder(QAudioFormat::LittleEndian);
+    fmt.setSampleType(QAudioFormat::SignedInt);
+
+    iAudioOutput = new QAudioOutput(fmt);
+    iAudioOutput->setBufferSize(KAudioBufSamples * 2 * 2); // двойная буферизация
+    iAudioDevice = iAudioOutput->start(); // push mode
 }
 
 CNESPAPU::~CNESPAPU()
 {
     Stop();
-    delete iOutputStream;
-    delete iSq1;
-    delete iSq2;
-    delete iTri;
-    delete iNoise;
-    delete iDMC;
+    delete iAudioOutput;
+    delete iSq1; delete iSq2; delete iTri; delete iNoise; delete iDMC;
 }
 
 void CNESPAPU::Reset()
@@ -441,32 +446,19 @@ void CNESPAPU::MixSample()
 
 void CNESPAPU::FlushBuffer()
 {
-    if (!iStreamOpen) return;
+    if (!iAudioDevice || !iRunning) return;
 
-    TInt src = iBufWrite ^ 1; // только что заполненный буфер
-    iPlayBuf.Set(reinterpret_cast<u8*>(iAudioBuf[src]),
-                 KAudioBufSamples * 2,
-                 KAudioBufSamples * 2);
-    iOutputStream->WriteL(iPlayBuf);
-}
-
-// ---------------------------------------------------------------------------
-// MMdaAudioOutputStreamCallback
-// ---------------------------------------------------------------------------
-void CNESPAPU::MaoscOpenComplete(TInt aError)
-{
-    if (aError == KErrNone)
+    TInt src = iBufWrite ^ 1;
+    const char* data = reinterpret_cast<const char*>(iAudioBuf[src]);
+    qint64 len       = KAudioBufSamples * sizeof(s16);
+    qint64 written   = 0;
+    while (written < len)
     {
-        iOutputStream->SetAudioPropertiesL(
-            TMdaAudioDataSettings::ESampleRate44100Hz,
-            TMdaAudioDataSettings::EChannelsMono);
-        iOutputStream->SetVolume(iOutputStream->MaxVolume() / 2);
-        iStreamOpen = ETrue;
+        qint64 n = iAudioDevice->write(data + written, len - written);
+        if (n <= 0) break;
+        written += n;
     }
 }
-
-void CNESPAPU::MaoscBufferCopied(TInt /*aError*/, const TDesC8& /*aBuffer*/) {}
-void CNESPAPU::MaoscPlayComplete(TInt /*aError*/) {}
 
 void CNESPAPU::SetSampleRate(TInt aRate)
 {
