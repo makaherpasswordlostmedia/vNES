@@ -1,0 +1,21 @@
+; vNES.pkg — установочный файл SIS (Symbian Installation Script)
+; Собрать: makesis vNES.pkg vNES.sis
+;          signsis vNES.sis vNES_signed.sis cert.cer key.key
+
+&EN
+
+; Информация о приложении
+#{"vNES NES Emulator"},(0xE0000001),1,0,0
+
+; Платформа: S60 3rd Edition + (или 5th Ed)
+(0x101F7961), 0, 0, 0, {"Series60ProductID"}
+
+; Файлы
+"../epoc32/release/gcce/urel/vnes.exe"   -"!:\sys\bin\vnes.exe"
+
+; Каталог для ROM-файлов (создаётся при установке)
+@"vnes_roms.pkg"
+
+; Запись в меню
+"../epoc32/release/gcce/urel/vnes.exe"   -"!:\private\10003a3f\import\apps\vnes_reg.rsc", FT, TC
+  
