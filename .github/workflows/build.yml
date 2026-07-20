@@ -1,0 +1,143 @@
+name: Build vNES for Symbian (.sis)
+
+# ВАЖНО (прочитать перед запуском):
+# Этот workflow пытается собрать .sis для Nokia C7 (Symbian^3) через
+# Nokia Qt SDK 1.1.2 OFFLINE-инсталлятор (Windows), взятый с архивной
+# копии на archive.org:
+#   https://archive.org/download/nokia_sdks_n_dev_tools/Qt_SDK_Win_offline_v1_1_2_en.exe
+#
+# Сборка идёт на windows-latest, т.к. это Windows .exe-инсталлятор.
+#
+# "Offline" в названии повышает шансы, что инсталлятор не полезет
+# докачивать компоненты с мёртвых серверов Nokia/Qt — но 100% гарантии
+# нет. Если шаг установки всё равно упадёт на сети — смотри лог, он
+# покажет, на чём именно.
+#
+# Самоподписанный сертификат для .sis генерируется прямо в workflow
+# через OpenSSL. Такой .sis ставится на телефон, но с ограниченными
+# capability (без доступа к системным API уровня Manufacturer/All-TCB) —
+# для игрового эмулятора этого достаточно.
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+env:
+  SDK_URL: "https://archive.org/download/nokia_sdks_n_dev_tools/Qt_SDK_Win_offline_v1_1_2_en.exe"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Qt/Symbian SDK installer
+        run: |
+          Write-Host "Скачиваю SDK с $env:SDK_URL ..."
+          try {
+            Invoke-WebRequest -Uri $env:SDK_URL -OutFile sdk_installer.exe -UseBasicParsing
+          } catch {
+            Write-Host "::error::Не удалось скачать SDK по указанному URL: $_"
+            exit 1
+          }
+          Get-Item sdk_installer.exe | Select-Object Name, Length
+
+      - name: Install Qt SDK (silent)
+        run: |
+          Write-Host "Пытаюсь установить SDK в тихом режиме..."
+          # Nokia Qt SDK installer основан на Qt Installer Framework (QtIFW).
+          # Пробуем стандартные тихие ключи QtIFW. Если формат окажется другим
+          # (NSIS/InstallShield), шаг явно упадёт с логом, а не притворится.
+          $proc = Start-Process -FilePath ".\sdk_installer.exe" `
+            -ArgumentList "--verbose", "-s", "--accept-licenses", "--confirm-command" `
+            -Wait -PassThru -RedirectStandardOutput install_stdout.log -RedirectStandardError install_stderr.log
+          Get-Content install_stdout.log -ErrorAction SilentlyContinue
+          Get-Content install_stderr.log -ErrorAction SilentlyContinue
+          if ($proc.ExitCode -ne 0) {
+            Write-Host "::error::Установщик вернул код $($proc.ExitCode). Смотри логи выше."
+            Write-Host "::error::Возможные причины: инсталлятор требует интерактива, либо докачивал недоступные компоненты."
+            exit 1
+          }
+
+      - name: Locate qmake / sbs / makesis / signsis
+        id: tools
+        run: |
+          Write-Host "Ищу нужные бинарники после установки..."
+          $roots = @("C:\QtSDK", "C:\Qt", "$env:LOCALAPPDATA\Qt", "$env:ProgramFiles\Qt", "${env:ProgramFiles(x86)}\Qt")
+          function Find-Tool($name) {
+            foreach ($r in $roots) {
+              if (Test-Path $r) {
+                $found = Get-ChildItem -Path $r -Recurse -Filter $name -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($found) { return $found.FullName }
+              }
+            }
+            return $null
+          }
+          $qmake = Find-Tool "qmake.exe"
+          $sbs = Find-Tool "sbs.exe"
+          $makesis = Find-Tool "makesis.exe"
+          $signsis = Find-Tool "signsis.exe"
+          Write-Host "qmake: $qmake"
+          Write-Host "sbs: $sbs"
+          Write-Host "makesis: $makesis"
+          Write-Host "signsis: $signsis"
+          if (-not $qmake -or -not $sbs -or -not $makesis) {
+            Write-Host "::error::Не все инструменты найдены после установки SDK (qmake/sbs/makesis обязательны)."
+            Write-Host "::error::Значит offline-инсталлятор не включает полный Symbian^3 toolchain, либо он не установился в тихом режиме."
+            exit 1
+          }
+          "qmake=$qmake" >> $env:GITHUB_OUTPUT
+          "sbs=$sbs" >> $env:GITHUB_OUTPUT
+          "makesis=$makesis" >> $env:GITHUB_OUTPUT
+          "signsis=$signsis" >> $env:GITHUB_OUTPUT
+
+      - name: Generate self-signed cert for signing .sis
+        run: |
+          New-Item -ItemType Directory -Force -Path cert | Out-Null
+          & "C:\Program Files\Git\usr\bin\openssl.exe" req -x509 -newkey rsa:2048 `
+            -keyout cert\vnes.key -out cert\vnes.pem -days 3650 -nodes `
+            -subj "/CN=vNES Self-Signed/O=vNES/C=RU"
+          Write-Host "Сертификат сгенерирован (cert/vnes.pem, cert/vnes.key)."
+
+      - name: Build with qmake + sbs
+        working-directory: src
+        run: |
+          & "${{ steps.tools.outputs.qmake }}" vnes.pro -spec symbian-sbsv2
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::qmake завершился с ошибкой."; exit 1 }
+          & "${{ steps.tools.outputs.sbs }}" -c gcce_urel
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::sbs (компиляция) завершилась с ошибкой."; exit 1 }
+
+      - name: Package and sign .sis
+        run: |
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          $pkg = Get-ChildItem -Path src -Recurse -Filter "*.pkg" | Select-Object -First 1
+          if (-not $pkg) {
+            Write-Host "::error::Не найден .pkg файл после сборки — sbs не создал пакет."
+            exit 1
+          }
+          & "${{ steps.tools.outputs.makesis }}" $pkg.FullName build\vnes.sis
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::makesis завершился с ошибкой."; exit 1 }
+
+          $signsis = "${{ steps.tools.outputs.signsis }}"
+          if ($signsis) {
+            & $signsis -S build\vnes.sis build\vnes_signed.sis cert\vnes.pem cert\vnes.key
+            if ($LASTEXITCODE -eq 0) {
+              Move-Item -Force build\vnes_signed.sis build\vnes.sis
+            } else {
+              Write-Host "::warning::signsis завершился с ошибкой, .sis остаётся неподписанным."
+            }
+          } else {
+            Write-Host "::warning::signsis не найден, .sis остаётся неподписанным."
+          }
+          Get-ChildItem build
+
+      - name: Upload .sis artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vnes-sis
+          path: build/vnes.sis
+          if-no-files-found: error
