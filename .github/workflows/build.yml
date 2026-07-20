@@ -20,7 +20,7 @@ name: Build vNES for Symbian (.sis)
 
 on:
   push:
-    branches: [ main ]
+    branches: [ symbian ]
   workflow_dispatch: {}
 
 env:
