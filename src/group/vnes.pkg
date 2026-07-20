@@ -1,0 +1,24 @@
+; vnes.pkg — установочный скрипт для makesis
+; Написан вручную взамен автогенерации из vnes.pro (DEPLOYMENT секция),
+; т.к. сборка теперь идёт через голый sbs, а не через Qt-деплоймент.
+
+; Языки: только English
+&EN
+
+; UID пакета, версия, тип платформы (Symbian^3 / S60 5th Edition совместимо)
+#{"vNES"},(0xE0000002),1,0,0,TYPE=SA
+
+; Информация о поставщике
+%{"vNES"}
+:"vNES"
+
+; Требуемая платформа
+[0x102752AE], 0, 0, 0, {"S60ProductID"}
+
+; Файлы для установки: exe и ресурсы
+"\epoc32\release\gcce\urel\vnes.exe"          - "!:\sys\bin\vnes.exe"
+"\epoc32\data\z\resource\apps\vnes_reg.rsc"   - "!:\private\10003a3f\import\apps\vnes_reg.rsc"
+"\epoc32\data\z\resource\apps\vnes.rsc"       - "!:\resource\apps\vnes.rsc"
+
+; Создать папку для ROM-файлов на телефоне (пусто, юзер сам копирует .nes)
+""                                            - "!:\Data\NES\", FILENULL

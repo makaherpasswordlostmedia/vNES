@@ -1,0 +1,17 @@
+/*
+ * bld.inf — точка входа сборки vNES для Symbian^3 (Nokia C7)
+ *
+ * Написан вручную, т.к. проект изначально был Qt-based (vnes.pro),
+ * а Qt-фронтенд (NESWidget/main.cpp) заменён на нативный Avkon-фронтенд
+ * (см. src/native/), потому что готового Qt SDK (с qmake -spec
+ * symbian-sbsv2, генерирующим bld.inf/.mmp автоматически) для headless
+ * сборки в CI получить не удалось. Движок эмулятора (NESCPU/NESPPU/
+ * NESPAPU/NESMapper/NESMemory/NESROM/NESSystem) уже был написан на
+ * нативном Symbian C++ и не менялся.
+ */
+
+PRJ_PLATFORMS
+GCCE
+
+PRJ_MMPFILES
+vnes.mmp

@@ -1,0 +1,56 @@
+// vnes.mmp — описание сборки для sbs (Raptor)
+// Написан вручную взамен генерации из vnes.pro через qmake, т.к.
+// Qt SDK для headless-сборки недоступен. См. bld.inf.
+
+TARGET          vnes.exe
+TARGETTYPE      exe
+UID             0x100039CE 0xE0000002
+// 0x100039CE = KUidApp (стандартный UID2 для GUI-приложений Symbian)
+// 0xE0000002 = UID3 приложения (тот же, что был в vnes.pro TARGET.UID3)
+
+CAPABILITY      ReadUserData WriteUserData UserEnvironment
+
+EPOCHEAPSIZE    0x100000 0x2000000
+
+SOURCEPATH      ../src
+SOURCE          Globals.cpp
+SOURCE          NESMemory.cpp
+SOURCE          NESROM.cpp
+SOURCE          NESMapper.cpp
+SOURCE          NESCPU.cpp
+SOURCE          NESPPU.cpp
+SOURCE          NESPAPU.cpp
+SOURCE          NESSystem.cpp
+
+SOURCEPATH      ../native
+SOURCE          NesApplication.cpp
+SOURCE          NesAppUi.cpp
+SOURCE          NesAppView.cpp
+SOURCE          NesDocument.cpp
+
+USERINCLUDE     ../inc
+USERINCLUDE     ../native
+
+SYSTEMINCLUDE   /epoc32/include
+
+LIBRARY         euser.lib
+LIBRARY         apparc.lib
+LIBRARY         cone.lib
+LIBRARY         eikcore.lib
+LIBRARY         avkon.lib
+LIBRARY         fbscli.lib
+LIBRARY         ws32.lib
+LIBRARY         gdi.lib
+LIBRARY         bafl.lib
+LIBRARY         efsrv.lib
+LIBRARY         estor.lib
+
+// Ресурсы приложения (регистрация, локализация)
+START RESOURCE  ../native/vnes_reg.rss
+TARGET          vnes_reg.rsc
+END
+
+START RESOURCE  ../native/vnes.rss
+HEADER
+TARGETPATH      resource/apps
+END
