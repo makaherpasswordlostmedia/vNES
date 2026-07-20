@@ -80,20 +80,20 @@ jobs:
           echo "arm-none-eabi-gcc:"
           arm-none-eabi-gcc --version | head -1
 
-      - name: Detect GCCE toolchain version for SBS_GCCE<ver>BIN
+      - name: Set SBS_GCCE1210BIN target key
         id: gcce
         run: |
           set -e
-          # Raptor требует переменную SBS_GCCE<version>BIN, где <version> —
-          # версия компилятора без точек (например 1210 для 12.1.0). Берём
-          # реальную версию установленного gcc-arm-none-eabi, а не гадаем.
+          # Патченный s60_sbs_config.xml/gcc.xml в этом дереве Raptor жёстко
+          # ожидает переменную SBS_GCCE1210BIN для алиаса armv5_urel/GCCE,
+          # независимо от того, какая версия arm-none-eabi-gcc реально
+          # установлена (номер — это ключ конфигурации, не проверка версии
+          # самого бинарника). Поэтому не вычисляем версию динамически —
+          # используем фиксированный ключ 1210, который требует лог ошибки.
           FULL_VER=$(arm-none-eabi-gcc -dumpversion)
-          echo "Полная версия компилятора: $FULL_VER"
-          # Собираем ключ вида "1210" из "12.1.0" -> первые три числа без точек
-          VER_KEY=$(echo "$FULL_VER" | awk -F. '{ printf "%s%s%s", $1, ($2==""?0:$2), ($3==""?0:$3) }')
-          echo "Вычисленный ключ версии: $VER_KEY"
+          echo "Установленная версия arm-none-eabi-gcc: $FULL_VER (используется под ключом 1210)"
           BIN_DIR=$(dirname "$(command -v arm-none-eabi-gcc)")
-          echo "gcce_ver_key=$VER_KEY" >> "$GITHUB_OUTPUT"
+          echo "gcce_ver_key=1210" >> "$GITHUB_OUTPUT"
           echo "gcce_bin_dir=$BIN_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Clone symbian-build toolchain sources
