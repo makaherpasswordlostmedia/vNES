@@ -44,7 +44,7 @@ name: Build vNES for Symbian (.sis)
 
 on:
   push:
-    branches: [ symbian ]
+    branches: [ main, symbian ]
   workflow_dispatch: {}
 
 env:
@@ -99,29 +99,50 @@ jobs:
             || { echo "::error::Не удалось скачать PDK по указанному URL."; exit 1; }
           ls -lh pdk.zip
 
+      - name: Install 7-Zip (needed for PDK archives mislabeled as .zip)
+        run: |
+          set -e
+          sudo apt-get install -y -qq p7zip-full
+
       - name: Extract PDK into EPOCROOT
         run: |
           set -e
           echo "Распаковываю PDK в epocroot/ ..."
           unzip -q pdk.zip -d pdk_extracted || { echo "::error::Не удалось распаковать PDK zip."; exit 1; }
           echo "Верхний уровень PDK-архива:"
-          find pdk_extracted -maxdepth 2
-          # PDK-архивы Symbian обычно содержат вложенные zip'ы
-          # (binaries_epoc.zip, binaries_epoc_sdk.zip, tools_epoc.zip) или
-          # уже готовое дерево epoc32/. Обрабатываем оба случая.
-          NESTED_ZIPS=$(find pdk_extracted -iname "*.zip")
-          if [ -n "$NESTED_ZIPS" ]; then
+          find pdk_extracted -maxdepth 3
+
+          mkdir -p epocroot
+
+          # Многие файлы внутри называются "*.7z.zip", но по факту это
+          # НЕ настоящий ZIP (unzip падает на "End-of-central-directory
+          # signature not found") — судя по всему, это чистый 7z-архив,
+          # которому при выгрузке на archive.org просто приписали ".zip"
+          # к имени. Поэтому пробуем сначала unzip, а если он не признал
+          # файл как zip — пробуем 7z напрямую по реальным байтам файла.
+          NESTED=$(find pdk_extracted -iname "*.zip")
+          if [ -n "$NESTED" ]; then
             echo "Найдены вложенные архивы, распаковываю каждый в epocroot/:"
-            for z in $NESTED_ZIPS; do
+            for z in $NESTED; do
               echo "  - $z"
-              unzip -q -o "$z" -d epocroot/ || echo "::warning::Не удалось распаковать $z"
+              if unzip -tq "$z" >/dev/null 2>&1; then
+                echo "    (настоящий zip) unzip..."
+                unzip -q -o "$z" -d epocroot/ || echo "::warning::unzip не смог распаковать $z, хотя тест прошёл"
+              else
+                echo "    (не настоящий zip, пробую как 7z по содержимому)"
+                7z x "$z" -oepocroot/ -y > /tmp/7z_$(basename "$z").log 2>&1 \
+                  || echo "::warning::7z тоже не смог распаковать $z, см. /tmp/7z_$(basename "$z").log"
+              fi
             done
           else
-            echo "Вложенных zip не найдено, копирую распакованное дерево целиком в epocroot/"
+            echo "Вложенных архивов не найдено, копирую распакованное дерево целиком в epocroot/"
             cp -r pdk_extracted/* epocroot/ 2>/dev/null || true
           fi
+
           echo "Проверяю наличие epoc32/ в EPOCROOT:"
-          find epocroot -maxdepth 2 -iname "epoc32"
+          find epocroot -maxdepth 2 -iname "epoc32" || true
+          echo "Полное дерево верхнего уровня epocroot/ (для диагностики):"
+          find epocroot -maxdepth 3 -type d
 
       - name: One-time environment fixes (prep_env.pl)
         working-directory: epocroot/build/cross-plat-dev-utils
@@ -130,7 +151,10 @@ jobs:
           export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
           echo "EPOCROOT=$EPOCROOT"
           echo "Запускаю prep_env.pl (fix_raptor_config.pl + fix_epoc32.pl)..."
-          perl prep_env.pl || { echo "::error::prep_env.pl завершился с ошибкой — см. вывод выше."; exit 1; }
+          # Современный Perl (5.36+) убрал "." из @INC по умолчанию (CVE-2016-1238),
+          # а prep_env.pl подключает usage.pm/perl_run.pm из своей же директории
+          # без use lib — поэтому добавляем текущую директорию явным ключом -I.
+          perl -I. prep_env.pl || { echo "::error::prep_env.pl завершился с ошибкой — см. вывод выше."; exit 1; }
 
       - name: Build Raptor (sbsv2)
         working-directory: epocroot/build/cross-plat-dev-utils
@@ -138,7 +162,7 @@ jobs:
           set -e
           export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
           echo "Собираю Raptor — это может занять долго..."
-          perl build_raptor.pl 2>&1 | tee "$GITHUB_WORKSPACE/build_raptor.log" \
+          perl -I. build_raptor.pl 2>&1 | tee "$GITHUB_WORKSPACE/build_raptor.log" \
             || { echo "::error::Сборка Raptor завершилась с ошибкой. См. build_raptor.log в артефактах."; exit 1; }
 
       - name: Locate sbs / makesis / elf2e32 binaries
