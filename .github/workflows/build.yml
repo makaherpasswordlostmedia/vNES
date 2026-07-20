@@ -133,22 +133,31 @@ jobs:
           echo "Полное дерево верхнего уровня epocroot/ (для диагностики):"
           find epocroot -maxdepth 3 -type d
 
-      - name: Fix wrong patch-files subdir (build -> linux_build)
+      - name: Fix missing patch-files/linux/build/... (mirror from linux_build)
         working-directory: epocroot/build/cross-plat-dev-utils
         run: |
           set -e
-          # prep_env.pl / fix_raptor_config.pl / apply_patch_file.pm ищут патчи
-          # под patch-files/linux/build/..., но в апстриме (и по историческому
-          # README-LINUX) этот подкаталог называется linux_build, не build.
-          # Правим ссылки на путь в самих perl-скриптах, а не переименовываем
-          # сам patch-files (он выложен разработчиками репозитория как есть).
-          echo "Ищу вхождения 'linux/build' в perl-скриптах..."
-          grep -rl "linux/build" --include="*.pl" --include="*.pm" . || true
-          grep -rl "linux/build" --include="*.pl" --include="*.pm" . | \
-            xargs -r sed -i 's#linux/build#linux/linux_build#g'
-          echo "Проверяю, что нужный патч теперь находится по новому пути:"
-          find patch-files/linux/linux_build -iname "gcc.xml" || \
-            { echo "::error::gcc.xml не найден и после исправления пути — структура patch-files отличается сильнее, чем ожидалось."; exit 1; }
+          # apply_patch_file.pm строит путь до патча как:
+          #   patch-files/linux/<путь файла относительно EPOCROOT>
+          # Целевой файл в EPOCROOT — build/sbsv2/raptor/lib/config/gcc.xml,
+          # поэтому скрипт ищет patch-files/linux/build/sbsv2/.../gcc.xml.
+          # Но в апстриме нужный патч лежит под linux_build/, не build/
+          # (см. историю каталога на GitHub — коммит Mike Kinghan,
+          # patch-files/linux/linux_build/sbsv2/raptor/lib/config/gcc.xml).
+          # Зеркалируем весь недостающий поддерево linux_build -> build,
+          # не трогая исходные файлы репозитория.
+          SRC="patch-files/linux/linux_build"
+          DST="patch-files/linux/build"
+          if [ -d "$SRC" ]; then
+            echo "Зеркалирую $SRC -> $DST (только файлы, которых там ещё нет)..."
+            mkdir -p "$DST"
+            cp -rn "$SRC"/. "$DST"/ 2>/dev/null || cp -r "$SRC"/. "$DST"/
+            echo "Проверяю, что нужный патч теперь на месте:"
+            find "$DST" -iname "gcc.xml" || \
+              { echo "::error::gcc.xml всё равно не найден в $DST после зеркалирования из $SRC."; exit 1; }
+          else
+            echo "::warning::$SRC не существует — пропускаю зеркалирование, структура репозитория отличается от ожидаемой."
+          fi
 
       - name: One-time environment fixes (prep_env.pl)
         working-directory: epocroot/build/cross-plat-dev-utils
