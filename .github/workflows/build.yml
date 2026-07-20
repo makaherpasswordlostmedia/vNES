@@ -70,29 +70,56 @@ jobs:
             perl python3 \
             build-essential \
             g++ gcc \
-            unzip zip \
+            unzip zip wget \
             gcc-multilib g++-multilib \
-            gcc-arm-none-eabi
+            libgmp-dev libmpfr-dev libmpc-dev libisl-dev texinfo
           echo "Готово. Ключевые версии:"
           gcc --version | head -1
           perl --version | head -2
           bison --version | head -1
-          echo "arm-none-eabi-gcc:"
-          arm-none-eabi-gcc --version | head -1
 
-      - name: Set SBS_GCCE1210BIN target key
+      - name: Cache arm-none-symbianelf toolchain (gcc 12.1.0)
+        id: gcce-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/gcc-builds/gcc-12.1.0
+          key: arm-none-symbianelf-gcc-12.1.0-${{ runner.os }}-v1
+
+      - name: Build arm-none-symbianelf-gcc 12.1.0 (GCCECC toolchain, from source)
+        if: steps.gcce-cache.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          # Raptor в этом дереве (gcc.xml/s60_sbs_config.xml) жёстко требует
+          # компилятор с именем arm-none-symbianelf-g++ версии ровно 12.1.0
+          # ("tool 'GCCECC' ... did not return version '12.1.0'"). Такого
+          # готового бинарного дистрибутива в природе не существует — это
+          # специфичный для Symbian target triplet, отличный от стандартного
+          # arm-none-eabi. Собираем его из исходников по рецепту
+          # fedor4ever/GCC4Symbian (Attribution-NonCommercial 4.0, публичный
+          # скрипт сборки), который явно рассчитан на TARGET=arm-none-symbianelf
+          # и GCCC=gcc-12.1.0 — то есть ту самую версию, что требует Raptor.
+          echo "Клонирую GCC4Symbian..."
+          git clone --depth 1 https://github.com/fedor4ever/GCC4Symbian.git /tmp/gcc4symbian \
+            || { echo "::error::Не удалось склонировать fedor4ever/GCC4Symbian."; exit 1; }
+          cd /tmp/gcc4symbian
+          echo "Собираю arm-none-symbianelf-gcc 12.1.0 — это займёт продолжительное время..."
+          chmod +x build-toolchain.sh
+          ./build-toolchain.sh 2>&1 | tee "$GITHUB_WORKSPACE/build_gcce_toolchain.log" \
+            || { echo "::error::Сборка arm-none-symbianelf-gcc завершилась с ошибкой. См. build_gcce_toolchain.log."; exit 1; }
+          echo "Готовый тулчейн:"
+          ls -la ~/gcc-builds/gcc-12.1.0/bin | head -20
+
+      - name: Verify arm-none-symbianelf-g++ toolchain
         id: gcce
         run: |
           set -e
-          # Патченный s60_sbs_config.xml/gcc.xml в этом дереве Raptor жёстко
-          # ожидает переменную SBS_GCCE1210BIN для алиаса armv5_urel/GCCE,
-          # независимо от того, какая версия arm-none-eabi-gcc реально
-          # установлена (номер — это ключ конфигурации, не проверка версии
-          # самого бинарника). Поэтому не вычисляем версию динамически —
-          # используем фиксированный ключ 1210, который требует лог ошибки.
-          FULL_VER=$(arm-none-eabi-gcc -dumpversion)
-          echo "Установленная версия arm-none-eabi-gcc: $FULL_VER (используется под ключом 1210)"
-          BIN_DIR=$(dirname "$(command -v arm-none-eabi-gcc)")
+          BIN_DIR="$HOME/gcc-builds/gcc-12.1.0/bin"
+          if [ ! -x "$BIN_DIR/arm-none-symbianelf-g++" ]; then
+            echo "::error::arm-none-symbianelf-g++ не найден в $BIN_DIR после сборки/восстановления из кэша."
+            exit 1
+          fi
+          echo "Версия компилятора:"
+          "$BIN_DIR/arm-none-symbianelf-g++" -dumpversion
           echo "gcce_ver_key=1210" >> "$GITHUB_OUTPUT"
           echo "gcce_bin_dir=$BIN_DIR" >> "$GITHUB_OUTPUT"
 
@@ -268,7 +295,7 @@ jobs:
         run: |
           export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
           export SBS_HOME="${{ steps.tools.outputs.sbs_home }}"
-          export PATH="$SBS_HOME/bin:$PATH"
+          export PATH="$SBS_HOME/bin:${{ steps.gcce.outputs.gcce_bin_dir }}:$PATH"
           # Raptor's evaluator требует SBS_GCCE<version>BIN, указывающий на
           # bin/ реального ARM GCCE-тулчейна (см. UninitialisedVariableException).
           export "SBS_GCCE${{ steps.gcce.outputs.gcce_ver_key }}BIN"="${{ steps.gcce.outputs.gcce_bin_dir }}"
@@ -283,7 +310,7 @@ jobs:
           set -e
           export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
           export SBS_HOME="${{ steps.tools.outputs.sbs_home }}"
-          export PATH="$SBS_HOME/bin:$PATH"
+          export PATH="$SBS_HOME/bin:${{ steps.gcce.outputs.gcce_bin_dir }}:$PATH"
           export "SBS_GCCE${{ steps.gcce.outputs.gcce_ver_key }}BIN"="${{ steps.gcce.outputs.gcce_bin_dir }}"
           echo "EPOCROOT=$EPOCROOT"
           echo "SBS_HOME=$SBS_HOME"
