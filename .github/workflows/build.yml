@@ -232,6 +232,37 @@ jobs:
           echo "makesis=$MAKESIS" >> "$GITHUB_OUTPUT"
           echo "elf2e32=$ELF2E32" >> "$GITHUB_OUTPUT"
 
+      - name: Populate missing HOSTPLATFORM_DIR bin (bash/make/python for Raptor)
+        run: |
+          set -e
+          SBS_HOME="${{ steps.tools.outputs.sbs_home }}"
+          # gethost.sh должен определять HOSTPLATFORM_DIR (обычно linux-x86_64)
+          # и Raptor ожидает найти там bash/make/python2/talon и т.п. — но
+          # gethost.sh в этом дереве падает на 32-битном тесте
+          # ("/lib/libc.so.6: No such file or directory"), поэтому каталог
+          # не заполняется. Создаём его сами и кладём туда симлинки на
+          # системные инструменты хоста, которые оригинальный Raptor обычно
+          # поставлял в комплекте.
+          PLATFORM_DIR="$SBS_HOME/linux-x86_64"
+          echo "Создаю $PLATFORM_DIR/bin и заполняю симлинками на системные утилиты..."
+          mkdir -p "$PLATFORM_DIR/bin"
+          for tool in bash make python3 perl sh; do
+            SYS_PATH=$(command -v "$tool" || true)
+            if [ -n "$SYS_PATH" ]; then
+              ln -sf "$SYS_PATH" "$PLATFORM_DIR/bin/$tool"
+              echo "  $tool -> $SYS_PATH"
+            else
+              echo "::warning::системный $tool не найден, пропускаю"
+            fi
+          done
+          # Raptor часто ищет "python" (без версии) и "make" под конкретными
+          # именами — на всякий случай добавляем алиас python -> python3.
+          if [ ! -e "$PLATFORM_DIR/bin/python" ] && command -v python3 >/dev/null; then
+            ln -sf "$(command -v python3)" "$PLATFORM_DIR/bin/python"
+          fi
+          echo "Итоговое содержимое $PLATFORM_DIR/bin:"
+          ls -la "$PLATFORM_DIR/bin"
+
       - name: List available Raptor build configurations
         working-directory: vnes-src/src/group
         run: |
