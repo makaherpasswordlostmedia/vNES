@@ -299,10 +299,11 @@ jobs:
           # Raptor's evaluator требует SBS_GCCE<version>BIN, указывающий на
           # bin/ реального ARM GCCE-тулчейна (см. UninitialisedVariableException).
           export "SBS_GCCE${{ steps.gcce.outputs.gcce_ver_key }}BIN"="${{ steps.gcce.outputs.gcce_bin_dir }}"
-          echo "Валидные группы/алиасы/варианты в этой конфигурации Raptor:"
-          "${{ steps.tools.outputs.sbs }}" -q -c help || true
+          echo "Валидные алиасы конфигураций в этой сборке Raptor:"
+          "${{ steps.tools.outputs.sbs }}" --alias || true
           echo "---"
-          "${{ steps.tools.outputs.sbs }}" --help-alias || true
+          echo "Общая справка sbs:"
+          "${{ steps.tools.outputs.sbs }}" --help || true
 
       - name: Build vNES with sbs
         working-directory: vnes-src/src/group
