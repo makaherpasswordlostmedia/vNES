@@ -71,11 +71,30 @@ jobs:
             build-essential \
             g++ gcc \
             unzip zip \
-            gcc-multilib g++-multilib
+            gcc-multilib g++-multilib \
+            gcc-arm-none-eabi
           echo "Готово. Ключевые версии:"
           gcc --version | head -1
           perl --version | head -2
           bison --version | head -1
+          echo "arm-none-eabi-gcc:"
+          arm-none-eabi-gcc --version | head -1
+
+      - name: Detect GCCE toolchain version for SBS_GCCE<ver>BIN
+        id: gcce
+        run: |
+          set -e
+          # Raptor требует переменную SBS_GCCE<version>BIN, где <version> —
+          # версия компилятора без точек (например 1210 для 12.1.0). Берём
+          # реальную версию установленного gcc-arm-none-eabi, а не гадаем.
+          FULL_VER=$(arm-none-eabi-gcc -dumpversion)
+          echo "Полная версия компилятора: $FULL_VER"
+          # Собираем ключ вида "1210" из "12.1.0" -> первые три числа без точек
+          VER_KEY=$(echo "$FULL_VER" | awk -F. '{ printf "%s%s%s", $1, ($2==""?0:$2), ($3==""?0:$3) }')
+          echo "Вычисленный ключ версии: $VER_KEY"
+          BIN_DIR=$(dirname "$(command -v arm-none-eabi-gcc)")
+          echo "gcce_ver_key=$VER_KEY" >> "$GITHUB_OUTPUT"
+          echo "gcce_bin_dir=$BIN_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Clone symbian-build toolchain sources
         run: |
@@ -219,6 +238,9 @@ jobs:
           export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
           export SBS_HOME="${{ steps.tools.outputs.sbs_home }}"
           export PATH="$SBS_HOME/bin:$PATH"
+          # Raptor's evaluator требует SBS_GCCE<version>BIN, указывающий на
+          # bin/ реального ARM GCCE-тулчейна (см. UninitialisedVariableException).
+          export "SBS_GCCE${{ steps.gcce.outputs.gcce_ver_key }}BIN"="${{ steps.gcce.outputs.gcce_bin_dir }}"
           echo "Валидные группы/алиасы/варианты в этой конфигурации Raptor:"
           "${{ steps.tools.outputs.sbs }}" -q -c help || true
           echo "---"
@@ -231,8 +253,10 @@ jobs:
           export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
           export SBS_HOME="${{ steps.tools.outputs.sbs_home }}"
           export PATH="$SBS_HOME/bin:$PATH"
+          export "SBS_GCCE${{ steps.gcce.outputs.gcce_ver_key }}BIN"="${{ steps.gcce.outputs.gcce_bin_dir }}"
           echo "EPOCROOT=$EPOCROOT"
           echo "SBS_HOME=$SBS_HOME"
+          echo "SBS_GCCE${{ steps.gcce.outputs.gcce_ver_key }}BIN=${{ steps.gcce.outputs.gcce_bin_dir }}"
           echo "Собираю из group/bld.inf (нативный Symbian-фронтенд, написан вручную взамен Qt)."
           ls -la
           # gcce_urel не является валидной конфигурацией/алиасом Raptor
