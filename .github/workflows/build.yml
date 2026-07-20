@@ -1,151 +1,215 @@
 name: Build vNES for Symbian (.sis)
 
 # ВАЖНО (прочитать перед запуском):
-# Этот workflow пытается собрать .sis для Nokia C7 (Symbian^3) через
-# Nokia Qt SDK 1.1.2 OFFLINE-инсталлятор (Windows), взятый с архивной
-# копии на archive.org:
-#   https://archive.org/download/nokia_sdks_n_dev_tools/Qt_SDK_Win_offline_v1_1_2_en.exe
 #
-# Сборка идёт на windows-latest, т.к. это Windows .exe-инсталлятор.
+# Предыдущая попытка (через Nokia Qt SDK offline-инсталлятор, .exe) не
+# сработала: инсталлятор виснет на GUI-диалоге вне зависимости от ключей
+# тишины, а распаковка через 7-Zip не даёт готовых бинарников qmake/sbs/
+# makesis — только внутренний payload инсталлятора.
 #
-# Запуск инсталлятора с любыми ключами тишины зависал на 15+ минут
-# (GUI-диалог, который не реагирует на --silent/-s/--accept-licenses).
-# Поэтому вместо запуска мы пробуем распаковать .exe как АРХИВ через
-# 7-Zip — многие self-extracting инсталляторы физически являются
-# архивом со сплавленным сверху EXE-стабом, и 7-Zip умеет вскрывать
-# такие файлы напрямую, без исполнения кода инсталлятора.
+# Новый, гораздо более реалистичный путь:
+#   1. Собираем сам сборочный тулчейн Symbian (Raptor/sbsv2, sbsv1/abld,
+#      makesis, elf2e32 и т.д.) ИЗ ИСХОДНИКОВ репозитория
+#      https://github.com/SymbianRevive/symbian-build
+#      — это открытый, живой, клонируемый Git-репозиторий, не мёртвый
+#      сервер Nokia.
+#   2. Скачиваем headers/libs платформы Symbian^3 (PDK 3.0.4a) с архивной
+#      копии на archive.org:
+#      https://archive.org/download/nokia_sdks_n_dev_tools/PDK_3_0_4_a.zip
+#      и раскладываем их в EPOCROOT рядом с symbian-build, как требует
+#      README этого репозитория.
+#   3. Собираем Raptor (build_raptor.pl), затем компилируем vNES через
+#      него из src/group/bld.inf + vnes.mmp — они написаны ВРУЧНУЮ,
+#      т.к. изначально их должен был генерировать qmake -spec
+#      symbian-sbsv2 из vnes.pro, а Qt SDK для headless-сборки
+#      недоступен (см. попытки выше в истории этого файла).
 #
-# Самоподписанный сертификат для .sis генерируется прямо в workflow
-# через OpenSSL. Такой .sis ставится на телефон, но с ограниченными
-# capability (без доступа к системным API уровня Manufacturer/All-TCB) —
-# для игрового эмулятора этого достаточно.
+#      Заодно Qt-фронтенд (NESWidget.cpp/main.cpp, использовавший
+#      QWidget/QPainter/QTimer) заменён на нативный Avkon-фронтенд
+#      (src/native/Nes{Application,Document,AppUi,AppView}.cpp) —
+#      двигатель эмулятора (NESCPU/NESPPU/NESPAPU/NESMapper/NESMemory/
+#      NESROM/NESSystem) уже был нативным Symbian C++ и НЕ менялся.
+#      ROM жёстко задан по пути C:\Data\NES\game.nes (без файлового
+#      диалога — упрощение для первой версии, см. BUILD_NOTES.md).
+#
+# ЭТО ДОЛГАЯ СБОРКА. Сама сборка Raptor из исходников занимает
+# продолжительное время (README прямо предупреждает "This takes some
+# time" дважды) — рассчитывайте на десятки минут, возможно больше часа
+# только на тулчейн, до того как дело дойдёт до самого vNES.
+#
+# Это первый прогон такого пути — весьма вероятно, что что-то придётся
+# донастраивать (версии bison/boost/libxml2, патчи из cross-plat-dev-utils
+# и т.д.). Каждый шаг логирует происходящее максимально подробно, чтобы
+# было видно, на чём именно застряло, если застрянет.
 
 on:
   push:
-    branches: [ symbian ]
+    branches: [ main ]
   workflow_dispatch: {}
 
 env:
-  SDK_URL: "https://archive.org/download/nokia_sdks_n_dev_tools/Qt_SDK_Win_offline_v1_1_2_en.exe"
+  PDK_URL: "https://archive.org/download/nokia_sdks_n_dev_tools/PDK_3_0_4_a.zip"
+  SYMBIAN_BUILD_REPO: "https://github.com/SymbianRevive/symbian-build.git"
 
 jobs:
   build:
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: pwsh
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout vNES sources
+        uses: actions/checkout@v4
+        with:
+          path: vnes-src
 
-      - name: Download Qt/Symbian SDK installer
+      - name: Install build prerequisites
         run: |
-          Write-Host "Скачиваю SDK с $env:SDK_URL ..."
-          try {
-            Invoke-WebRequest -Uri $env:SDK_URL -OutFile sdk_installer.exe -UseBasicParsing
-          } catch {
-            Write-Host "::error::Не удалось скачать SDK по указанному URL: $_"
-            exit 1
-          }
-          Get-Item sdk_installer.exe | Select-Object Name, Length
+          set -e
+          echo "Ставлю зависимости для сборки Raptor/sbsv2 (см. README-LINUX)..."
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            bison flex \
+            libncurses-dev \
+            libbz2-dev \
+            libboost-all-dev \
+            libxml2-dev \
+            perl python3 \
+            build-essential \
+            g++ gcc \
+            unzip zip \
+            gcc-multilib g++-multilib
+          echo "Готово. Ключевые версии:"
+          gcc --version | head -1
+          perl --version | head -2
+          bison --version | head -1
 
-      - name: Try extracting installer as archive (7-Zip) instead of running it
-        id: extract
-        timeout-minutes: 10
+      - name: Clone symbian-build toolchain sources
         run: |
-          Write-Host "Инсталлятор зависал на GUI при запуске с любыми ключами тишины."
-          Write-Host "Пробую вместо запуска просто распаковать .exe как архив через 7-Zip —"
-          Write-Host "многие self-extracting и QtIFW-инсталляторы физически являются архивом"
-          Write-Host "с добавленным spawn-стабом, и 7-Zip умеет читать содержимое напрямую,"
-          Write-Host "без исполнения кода инсталлятора."
-          choco install 7zip -y --no-progress | Out-Null
-          $sevenZip = "C:\Program Files\7-Zip\7z.exe"
-          if (-not (Test-Path $sevenZip)) {
-            Write-Host "::error::7-Zip не установился, дальше пробовать нечем на этом шаге."
-            exit 1
-          }
-          New-Item -ItemType Directory -Force -Path sdk_extracted | Out-Null
-          & $sevenZip x sdk_installer.exe -osdk_extracted -y | Tee-Object -FilePath extract.log
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::7-Zip не смог распаковать .exe как архив (код $LASTEXITCODE)."
-            Write-Host "::error::Значит это не самораспаковывающийся архив в чистом виде — придётся искать другой путь установки."
-            "extracted=false" >> $env:GITHUB_OUTPUT
-            exit 1
-          }
-          Write-Host "Распаковка прошла успешно. Содержимое:"
-          Get-ChildItem -Path sdk_extracted -Recurse | Select-Object -First 200 FullName
-          "extracted=true" >> $env:GITHUB_OUTPUT
+          set -e
+          echo "Клонирую $SYMBIAN_BUILD_REPO ..."
+          git clone --depth 1 "$SYMBIAN_BUILD_REPO" epocroot/build \
+            || { echo "::error::Не удалось склонировать symbian-build."; exit 1; }
+          echo "Содержимое верхнего уровня:"
+          ls epocroot/build
 
-      - name: Locate qmake / sbs / makesis / signsis
+      - name: Download PDK 3.0.4a (Symbian^3 headers/libs)
+        run: |
+          set -e
+          echo "Скачиваю PDK с $PDK_URL ..."
+          curl -L --fail -o pdk.zip "$PDK_URL" \
+            || { echo "::error::Не удалось скачать PDK по указанному URL."; exit 1; }
+          ls -lh pdk.zip
+
+      - name: Extract PDK into EPOCROOT
+        run: |
+          set -e
+          echo "Распаковываю PDK в epocroot/ ..."
+          unzip -q pdk.zip -d pdk_extracted || { echo "::error::Не удалось распаковать PDK zip."; exit 1; }
+          echo "Верхний уровень PDK-архива:"
+          find pdk_extracted -maxdepth 2
+          # PDK-архивы Symbian обычно содержат вложенные zip'ы
+          # (binaries_epoc.zip, binaries_epoc_sdk.zip, tools_epoc.zip) или
+          # уже готовое дерево epoc32/. Обрабатываем оба случая.
+          NESTED_ZIPS=$(find pdk_extracted -iname "*.zip")
+          if [ -n "$NESTED_ZIPS" ]; then
+            echo "Найдены вложенные архивы, распаковываю каждый в epocroot/:"
+            for z in $NESTED_ZIPS; do
+              echo "  - $z"
+              unzip -q -o "$z" -d epocroot/ || echo "::warning::Не удалось распаковать $z"
+            done
+          else
+            echo "Вложенных zip не найдено, копирую распакованное дерево целиком в epocroot/"
+            cp -r pdk_extracted/* epocroot/ 2>/dev/null || true
+          fi
+          echo "Проверяю наличие epoc32/ в EPOCROOT:"
+          find epocroot -maxdepth 2 -iname "epoc32"
+
+      - name: One-time environment fixes (prep_env.pl)
+        working-directory: epocroot/build/cross-plat-dev-utils
+        run: |
+          set -e
+          export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
+          echo "EPOCROOT=$EPOCROOT"
+          echo "Запускаю prep_env.pl (fix_raptor_config.pl + fix_epoc32.pl)..."
+          perl prep_env.pl || { echo "::error::prep_env.pl завершился с ошибкой — см. вывод выше."; exit 1; }
+
+      - name: Build Raptor (sbsv2)
+        working-directory: epocroot/build/cross-plat-dev-utils
+        run: |
+          set -e
+          export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
+          echo "Собираю Raptor — это может занять долго..."
+          perl build_raptor.pl 2>&1 | tee "$GITHUB_WORKSPACE/build_raptor.log" \
+            || { echo "::error::Сборка Raptor завершилась с ошибкой. См. build_raptor.log в артефактах."; exit 1; }
+
+      - name: Locate sbs / makesis / elf2e32 binaries
         id: tools
         run: |
-          Write-Host "Ищу нужные бинарники в распакованном архиве и стандартных путях установки..."
-          $roots = @("sdk_extracted", "C:\QtSDK", "C:\Qt", "$env:LOCALAPPDATA\Qt", "$env:ProgramFiles\Qt", "${env:ProgramFiles(x86)}\Qt")
-          function Find-Tool($name) {
-            foreach ($r in $roots) {
-              if (Test-Path $r) {
-                $found = Get-ChildItem -Path $r -Recurse -Filter $name -ErrorAction SilentlyContinue | Select-Object -First 1
-                if ($found) { return $found.FullName }
-              }
-            }
-            return $null
-          }
-          $qmake = Find-Tool "qmake.exe"
-          $sbs = Find-Tool "sbs.exe"
-          $makesis = Find-Tool "makesis.exe"
-          $signsis = Find-Tool "signsis.exe"
-          Write-Host "qmake: $qmake"
-          Write-Host "sbs: $sbs"
-          Write-Host "makesis: $makesis"
-          Write-Host "signsis: $signsis"
-          if (-not $qmake -or -not $sbs -or -not $makesis) {
-            Write-Host "::error::Не все инструменты найдены после установки SDK (qmake/sbs/makesis обязательны)."
-            Write-Host "::error::Значит offline-инсталлятор не включает полный Symbian^3 toolchain, либо он не установился в тихом режиме."
+          set -e
+          export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
+          echo "Ищу собранные инструменты..."
+          SBS=$(find epocroot -iname "sbs" -type f -executable 2>/dev/null | head -n1 || true)
+          MAKESIS=$(find epocroot -iname "makesis*" -type f -executable 2>/dev/null | head -n1 || true)
+          ELF2E32=$(find epocroot -iname "elf2e32*" -type f -executable 2>/dev/null | head -n1 || true)
+          echo "sbs: $SBS"
+          echo "makesis: $MAKESIS"
+          echo "elf2e32: $ELF2E32"
+          if [ -z "$SBS" ]; then
+            echo "::error::sbs не найден после сборки Raptor. Собрать vNES невозможно без него."
             exit 1
-          }
-          "qmake=$qmake" >> $env:GITHUB_OUTPUT
-          "sbs=$sbs" >> $env:GITHUB_OUTPUT
-          "makesis=$makesis" >> $env:GITHUB_OUTPUT
-          "signsis=$signsis" >> $env:GITHUB_OUTPUT
+          fi
+          echo "sbs=$SBS" >> "$GITHUB_OUTPUT"
+          echo "makesis=$MAKESIS" >> "$GITHUB_OUTPUT"
+          echo "elf2e32=$ELF2E32" >> "$GITHUB_OUTPUT"
 
-      - name: Generate self-signed cert for signing .sis
+      - name: Build vNES with sbs
+        working-directory: vnes-src/src/group
         run: |
-          New-Item -ItemType Directory -Force -Path cert | Out-Null
-          & "C:\Program Files\Git\usr\bin\openssl.exe" req -x509 -newkey rsa:2048 `
-            -keyout cert\vnes.key -out cert\vnes.pem -days 3650 -nodes `
-            -subj "/CN=vNES Self-Signed/O=vNES/C=RU"
-          Write-Host "Сертификат сгенерирован (cert/vnes.pem, cert/vnes.key)."
+          set -e
+          export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
+          echo "Собираю из group/bld.inf (нативный Symbian-фронтенд, написан вручную взамен Qt,"
+          echo "т.к. движок эмулятора уже был нативным C++, а Qt-обвязку заменить пришлось —"
+          echo "см. BUILD_NOTES.md)."
+          ls -la
+          "${{ steps.tools.outputs.sbs }}" -c gcce_urel 2>&1 | tee "$GITHUB_WORKSPACE/build_vnes.log" \
+            || { echo "::error::Компиляция vNES завершилась с ошибкой. См. build_vnes.log."; exit 1; }
 
-      - name: Build with qmake + sbs
-        working-directory: src
+      - name: Generate self-signed cert
         run: |
-          & "${{ steps.tools.outputs.qmake }}" vnes.pro -spec symbian-sbsv2
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::qmake завершился с ошибкой."; exit 1 }
-          & "${{ steps.tools.outputs.sbs }}" -c gcce_urel
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::sbs (компиляция) завершилась с ошибкой."; exit 1 }
+          set -e
+          mkdir -p cert
+          openssl req -x509 -newkey rsa:2048 -keyout cert/vnes.key -out cert/vnes.pem \
+            -days 3650 -nodes -subj "/CN=vNES Self-Signed/O=vNES/C=RU"
 
       - name: Package and sign .sis
         run: |
-          New-Item -ItemType Directory -Force -Path build | Out-Null
-          $pkg = Get-ChildItem -Path src -Recurse -Filter "*.pkg" | Select-Object -First 1
-          if (-not $pkg) {
-            Write-Host "::error::Не найден .pkg файл после сборки — sbs не создал пакет."
+          set -e
+          mkdir -p build
+          PKG=$(find vnes-src/src/group -iname "*.pkg" | head -n1)
+          if [ -z "$PKG" ]; then
+            echo "::error::Не найден .pkg файл после сборки — sbs не создал пакет."
             exit 1
-          }
-          & "${{ steps.tools.outputs.makesis }}" $pkg.FullName build\vnes.sis
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::makesis завершился с ошибкой."; exit 1 }
+          fi
+          echo "Найден .pkg: $PKG"
+          "${{ steps.tools.outputs.makesis }}" "$PKG" build/vnes.sis \
+            || { echo "::error::makesis завершился с ошибкой."; exit 1; }
+          SIGNSIS=$(find epocroot -iname "signsis*" -type f -executable 2>/dev/null | head -n1 || true)
+          if [ -n "$SIGNSIS" ]; then
+            "$SIGNSIS" -S build/vnes.sis build/vnes_signed.sis cert/vnes.pem cert/vnes.key \
+              && mv build/vnes_signed.sis build/vnes.sis
+          else
+            echo "::warning::signsis не найден, .sis остаётся неподписанным."
+          fi
+          ls -lh build/
 
-          $signsis = "${{ steps.tools.outputs.signsis }}"
-          if ($signsis) {
-            & $signsis -S build\vnes.sis build\vnes_signed.sis cert\vnes.pem cert\vnes.key
-            if ($LASTEXITCODE -eq 0) {
-              Move-Item -Force build\vnes_signed.sis build\vnes.sis
-            } else {
-              Write-Host "::warning::signsis завершился с ошибкой, .sis остаётся неподписанным."
-            }
-          } else {
-            Write-Host "::warning::signsis не найден, .sis остаётся неподписанным."
-          }
-          Get-ChildItem build
+      - name: Upload build logs (always, for diagnosis)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            build_raptor.log
+            build_vnes.log
+          if-no-files-found: ignore
 
       - name: Upload .sis artifact
         uses: actions/upload-artifact@v4
