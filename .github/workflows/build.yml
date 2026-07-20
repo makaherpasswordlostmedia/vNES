@@ -8,10 +8,12 @@ name: Build vNES for Symbian (.sis)
 #
 # Сборка идёт на windows-latest, т.к. это Windows .exe-инсталлятор.
 #
-# "Offline" в названии повышает шансы, что инсталлятор не полезет
-# докачивать компоненты с мёртвых серверов Nokia/Qt — но 100% гарантии
-# нет. Если шаг установки всё равно упадёт на сети — смотри лог, он
-# покажет, на чём именно.
+# Запуск инсталлятора с любыми ключами тишины зависал на 15+ минут
+# (GUI-диалог, который не реагирует на --silent/-s/--accept-licenses).
+# Поэтому вместо запуска мы пробуем распаковать .exe как АРХИВ через
+# 7-Zip — многие self-extracting инсталляторы физически являются
+# архивом со сплавленным сверху EXE-стабом, и 7-Zip умеет вскрывать
+# такие файлы напрямую, без исполнения кода инсталлятора.
 #
 # Самоподписанный сертификат для .sis генерируется прямо в workflow
 # через OpenSSL. Такой .sis ставится на телефон, но с ограниченными
@@ -20,7 +22,7 @@ name: Build vNES for Symbian (.sis)
 
 on:
   push:
-    branches: [ symbian ]
+    branches: [ main ]
   workflow_dispatch: {}
 
 env:
@@ -46,43 +48,38 @@ jobs:
           }
           Get-Item sdk_installer.exe | Select-Object Name, Length
 
-      - name: Install Qt SDK (silent)
-        timeout-minutes: 20
+      - name: Try extracting installer as archive (7-Zip) instead of running it
+        id: extract
+        timeout-minutes: 10
         run: |
-          Write-Host "Пытаюсь установить SDK в тихом режиме..."
-          $timeoutSec = 900
-          $psi = New-Object System.Diagnostics.ProcessStartInfo
-          $psi.FileName = ".\sdk_installer.exe"
-          $psi.Arguments = "--silent --accept-licenses"
-          $psi.RedirectStandardOutput = $true
-          $psi.RedirectStandardError = $true
-          $psi.UseShellExecute = $false
-          $p = [System.Diagnostics.Process]::Start($psi)
-          $finished = $p.WaitForExit($timeoutSec * 1000)
-          $stdout = $p.StandardOutput.ReadToEnd()
-          $stderr = $p.StandardError.ReadToEnd()
-          $stdout | Out-File install_stdout.log
-          $stderr | Out-File install_stderr.log
-          Write-Host "----- STDOUT -----"
-          Write-Host $stdout
-          Write-Host "----- STDERR -----"
-          Write-Host $stderr
-          if (-not $finished) {
-            Write-Host "::error::Инсталлятор не завершился за $timeoutSec сек — похоже, ждёт интерактива (лицензия/GUI-окно), несмотря на ключи тишины."
-            Write-Host "::error::Значит эта сборка инсталлятора не поддерживает headless-режим с текущими флагами, либо вообще не поддерживает его."
-            try { $p.Kill() } catch {}
+          Write-Host "Инсталлятор зависал на GUI при запуске с любыми ключами тишины."
+          Write-Host "Пробую вместо запуска просто распаковать .exe как архив через 7-Zip —"
+          Write-Host "многие self-extracting и QtIFW-инсталляторы физически являются архивом"
+          Write-Host "с добавленным spawn-стабом, и 7-Zip умеет читать содержимое напрямую,"
+          Write-Host "без исполнения кода инсталлятора."
+          choco install 7zip -y --no-progress | Out-Null
+          $sevenZip = "C:\Program Files\7-Zip\7z.exe"
+          if (-not (Test-Path $sevenZip)) {
+            Write-Host "::error::7-Zip не установился, дальше пробовать нечем на этом шаге."
             exit 1
           }
-          if ($p.ExitCode -ne 0) {
-            Write-Host "::error::Установщик вернул код $($p.ExitCode). Смотри логи выше."
+          New-Item -ItemType Directory -Force -Path sdk_extracted | Out-Null
+          & $sevenZip x sdk_installer.exe -osdk_extracted -y | Tee-Object -FilePath extract.log
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::7-Zip не смог распаковать .exe как архив (код $LASTEXITCODE)."
+            Write-Host "::error::Значит это не самораспаковывающийся архив в чистом виде — придётся искать другой путь установки."
+            "extracted=false" >> $env:GITHUB_OUTPUT
             exit 1
           }
+          Write-Host "Распаковка прошла успешно. Содержимое:"
+          Get-ChildItem -Path sdk_extracted -Recurse | Select-Object -First 200 FullName
+          "extracted=true" >> $env:GITHUB_OUTPUT
 
       - name: Locate qmake / sbs / makesis / signsis
         id: tools
         run: |
-          Write-Host "Ищу нужные бинарники после установки..."
-          $roots = @("C:\QtSDK", "C:\Qt", "$env:LOCALAPPDATA\Qt", "$env:ProgramFiles\Qt", "${env:ProgramFiles(x86)}\Qt")
+          Write-Host "Ищу нужные бинарники в распакованном архиве и стандартных путях установки..."
+          $roots = @("sdk_extracted", "C:\QtSDK", "C:\Qt", "$env:LOCALAPPDATA\Qt", "$env:ProgramFiles\Qt", "${env:ProgramFiles(x86)}\Qt")
           function Find-Tool($name) {
             foreach ($r in $roots) {
               if (Test-Path $r) {
