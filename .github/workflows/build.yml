@@ -213,6 +213,17 @@ jobs:
           echo "makesis=$MAKESIS" >> "$GITHUB_OUTPUT"
           echo "elf2e32=$ELF2E32" >> "$GITHUB_OUTPUT"
 
+      - name: List available Raptor build configurations
+        working-directory: vnes-src/src/group
+        run: |
+          export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
+          export SBS_HOME="${{ steps.tools.outputs.sbs_home }}"
+          export PATH="$SBS_HOME/bin:$PATH"
+          echo "Валидные группы/алиасы/варианты в этой конфигурации Raptor:"
+          "${{ steps.tools.outputs.sbs }}" -q -c help || true
+          echo "---"
+          "${{ steps.tools.outputs.sbs }}" --help-alias || true
+
       - name: Build vNES with sbs
         working-directory: vnes-src/src/group
         run: |
@@ -224,7 +235,11 @@ jobs:
           echo "SBS_HOME=$SBS_HOME"
           echo "Собираю из group/bld.inf (нативный Symbian-фронтенд, написан вручную взамен Qt)."
           ls -la
-          "${{ steps.tools.outputs.sbs }}" -c gcce_urel 2>&1 | tee "$GITHUB_WORKSPACE/build_vnes.log" \
+          # gcce_urel не является валидной конфигурацией/алиасом Raptor
+          # (см. "sbs: error: Unknown build configuration 'gcce_urel'").
+          # Стандартный алиас GCCE-сборки в Raptor — armv5_urel, который
+          # разворачивается в arm.v5.urel.gcce (см. документацию Raptor).
+          "${{ steps.tools.outputs.sbs }}" -c armv5_urel 2>&1 | tee "$GITHUB_WORKSPACE/build_vnes.log" \
             || { echo "::error::Компиляция vNES завершилась с ошибкой. См. build_vnes.log."; exit 1; }
 
       - name: Generate self-signed cert
