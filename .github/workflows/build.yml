@@ -192,9 +192,9 @@ jobs:
           set -e
           export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
           echo "Ищу собранные инструменты..."
-          SBS=$(find epocroot -iname "sbs" -type f -executable 2>/dev/null | head -n1 || true)
-          MAKESIS=$(find epocroot -iname "makesis*" -type f -executable 2>/dev/null | head -n1 || true)
-          ELF2E32=$(find epocroot -iname "elf2e32*" -type f -executable 2>/dev/null | head -n1 || true)
+          SBS=$(find "$GITHUB_WORKSPACE/epocroot" -iname "sbs" -type f 2>/dev/null | grep -v "\.pl$\|\.pm$" | head -n1 || true)
+          MAKESIS=$(find "$GITHUB_WORKSPACE/epocroot" -iname "makesis*" -type f -executable 2>/dev/null | head -n1 || true)
+          ELF2E32=$(find "$GITHUB_WORKSPACE/epocroot" -iname "elf2e32*" -type f -executable 2>/dev/null | head -n1 || true)
           echo "sbs: $SBS"
           echo "makesis: $MAKESIS"
           echo "elf2e32: $ELF2E32"
@@ -202,7 +202,14 @@ jobs:
             echo "::error::sbs не найден после сборки Raptor. Собрать vNES невозможно без него."
             exit 1
           fi
+          # sbs — это shell-обёртка (Raptor/Talon), а не одиночный бинарник:
+          # она сама ищет соседние файлы (raptor/bin/sbs и т.п.) относительно
+          # SBS_HOME, который нужно передать явно, иначе обёртка падает
+          # с "No such file or directory" на относительном пути.
+          SBS_HOME_DIR=$(dirname "$(dirname "$SBS")")
+          echo "SBS_HOME (вычислен): $SBS_HOME_DIR"
           echo "sbs=$SBS" >> "$GITHUB_OUTPUT"
+          echo "sbs_home=$SBS_HOME_DIR" >> "$GITHUB_OUTPUT"
           echo "makesis=$MAKESIS" >> "$GITHUB_OUTPUT"
           echo "elf2e32=$ELF2E32" >> "$GITHUB_OUTPUT"
 
@@ -211,6 +218,10 @@ jobs:
         run: |
           set -e
           export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
+          export SBS_HOME="${{ steps.tools.outputs.sbs_home }}"
+          export PATH="$SBS_HOME/bin:$PATH"
+          echo "EPOCROOT=$EPOCROOT"
+          echo "SBS_HOME=$SBS_HOME"
           echo "Собираю из group/bld.inf (нативный Symbian-фронтенд, написан вручную взамен Qt)."
           ls -la
           "${{ steps.tools.outputs.sbs }}" -c gcce_urel 2>&1 | tee "$GITHUB_WORKSPACE/build_vnes.log" \
