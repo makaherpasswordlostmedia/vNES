@@ -47,19 +47,34 @@ jobs:
           Get-Item sdk_installer.exe | Select-Object Name, Length
 
       - name: Install Qt SDK (silent)
+        timeout-minutes: 20
         run: |
           Write-Host "Пытаюсь установить SDK в тихом режиме..."
-          # Nokia Qt SDK installer основан на Qt Installer Framework (QtIFW).
-          # Пробуем стандартные тихие ключи QtIFW. Если формат окажется другим
-          # (NSIS/InstallShield), шаг явно упадёт с логом, а не притворится.
-          $proc = Start-Process -FilePath ".\sdk_installer.exe" `
-            -ArgumentList "--verbose", "-s", "--accept-licenses", "--confirm-command" `
-            -Wait -PassThru -RedirectStandardOutput install_stdout.log -RedirectStandardError install_stderr.log
-          Get-Content install_stdout.log -ErrorAction SilentlyContinue
-          Get-Content install_stderr.log -ErrorAction SilentlyContinue
-          if ($proc.ExitCode -ne 0) {
-            Write-Host "::error::Установщик вернул код $($proc.ExitCode). Смотри логи выше."
-            Write-Host "::error::Возможные причины: инсталлятор требует интерактива, либо докачивал недоступные компоненты."
+          $timeoutSec = 900
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = ".\sdk_installer.exe"
+          $psi.Arguments = "--silent --accept-licenses"
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          $psi.UseShellExecute = $false
+          $p = [System.Diagnostics.Process]::Start($psi)
+          $finished = $p.WaitForExit($timeoutSec * 1000)
+          $stdout = $p.StandardOutput.ReadToEnd()
+          $stderr = $p.StandardError.ReadToEnd()
+          $stdout | Out-File install_stdout.log
+          $stderr | Out-File install_stderr.log
+          Write-Host "----- STDOUT -----"
+          Write-Host $stdout
+          Write-Host "----- STDERR -----"
+          Write-Host $stderr
+          if (-not $finished) {
+            Write-Host "::error::Инсталлятор не завершился за $timeoutSec сек — похоже, ждёт интерактива (лицензия/GUI-окно), несмотря на ключи тишины."
+            Write-Host "::error::Значит эта сборка инсталлятора не поддерживает headless-режим с текущими флагами, либо вообще не поддерживает его."
+            try { $p.Kill() } catch {}
+            exit 1
+          }
+          if ($p.ExitCode -ne 0) {
+            Write-Host "::error::Установщик вернул код $($p.ExitCode). Смотри логи выше."
             exit 1
           }
 
