@@ -36,11 +36,6 @@ name: Build vNES for Symbian (.sis)
 # продолжительное время (README прямо предупреждает "This takes some
 # time" дважды) — рассчитывайте на десятки минут, возможно больше часа
 # только на тулчейн, до того как дело дойдёт до самого vNES.
-#
-# Это первый прогон такого пути — весьма вероятно, что что-то придётся
-# донастраивать (версии bison/boost/libxml2, патчи из cross-plat-dev-utils
-# и т.д.). Каждый шаг логирует происходящее максимально подробно, чтобы
-# было видно, на чём именно застряло, если застрянет.
 
 on:
   push:
@@ -114,12 +109,6 @@ jobs:
 
           mkdir -p epocroot
 
-          # Многие файлы внутри называются "*.7z.zip", но по факту это
-          # НЕ настоящий ZIP (unzip падает на "End-of-central-directory
-          # signature not found") — судя по всему, это чистый 7z-архив,
-          # которому при выгрузке на archive.org просто приписали ".zip"
-          # к имени. Поэтому пробуем сначала unzip, а если он не признал
-          # файл как zip — пробуем 7z напрямую по реальным байтам файла.
           NESTED=$(find pdk_extracted -iname "*.zip")
           if [ -n "$NESTED" ]; then
             echo "Найдены вложенные архивы, распаковываю каждый в epocroot/:"
@@ -151,9 +140,14 @@ jobs:
           export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
           echo "EPOCROOT=$EPOCROOT"
           echo "Запускаю prep_env.pl (fix_raptor_config.pl + fix_epoc32.pl)..."
-          # Современный Perl (5.36+) убрал "." из @INC по умолчанию (CVE-2016-1238),
-          # а prep_env.pl подключает usage.pm/perl_run.pm из своей же директории
-          # без use lib — поэтому добавляем текущую директорию явным ключом -I.
+          # Современный Perl (5.36+) убрал "." из @INC по умолчанию (CVE-2016-1238).
+          # prep_env.pl сам подключает usage.pm через use — это чинится -I.
+          # НО prep_env.pl вызывает fix_epoc32.pl/fix_raptor_config.pl через
+          # perl_run(), который делает system("perl $cmd") — это НОВЫЙ процесс
+          # perl, не наследующий -I родителя. Поэтому используем PERL5LIB
+          # (переменная окружения, которую читает любой дочерний perl-процесс)
+          # вместо/вместе с -I.
+          export PERL5LIB="$(pwd):$PERL5LIB"
           perl -I. prep_env.pl || { echo "::error::prep_env.pl завершился с ошибкой — см. вывод выше."; exit 1; }
 
       - name: Build Raptor (sbsv2)
@@ -162,6 +156,7 @@ jobs:
           set -e
           export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
           echo "Собираю Raptor — это может занять долго..."
+          export PERL5LIB="$(pwd):$PERL5LIB"
           perl -I. build_raptor.pl 2>&1 | tee "$GITHUB_WORKSPACE/build_raptor.log" \
             || { echo "::error::Сборка Raptor завершилась с ошибкой. См. build_raptor.log в артефактах."; exit 1; }
 
@@ -190,9 +185,7 @@ jobs:
         run: |
           set -e
           export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
-          echo "Собираю из group/bld.inf (нативный Symbian-фронтенд, написан вручную взамен Qt,"
-          echo "т.к. движок эмулятора уже был нативным C++, а Qt-обвязку заменить пришлось —"
-          echo "см. BUILD_NOTES.md)."
+          echo "Собираю из group/bld.inf (нативный Symbian-фронтенд, написан вручную взамен Qt)."
           ls -la
           "${{ steps.tools.outputs.sbs }}" -c gcce_urel 2>&1 | tee "$GITHUB_WORKSPACE/build_vnes.log" \
             || { echo "::error::Компиляция vNES завершилась с ошибкой. См. build_vnes.log."; exit 1; }
