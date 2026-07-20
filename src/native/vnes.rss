@@ -1,0 +1,21 @@
+/*
+ * vnes.rss — локализуемые ресурсы: имя приложения в меню, иконка.
+ * Без своей иконки (data/vnes.svg была закомментирована и в исходном
+ * vnes.pro — DEPLOYMENT было не активно), используется системная
+ * иконка-заглушка по умолчанию.
+ */
+NAME VNES
+
+#include <appinfo.rh>
+#include <avkon.rh>
+
+RESOURCE LOCALISABLE_APP_INFO R_LOCALISABLE_APP_INFO
+    {
+    short_caption = "vNES";
+    caption_and_icon =
+        CAPTION_AND_ICON_INFO
+            {
+            caption = "vNES";
+            // number_of_icons / icon_file опущены — системная иконка по умолчанию
+            };
+    }
