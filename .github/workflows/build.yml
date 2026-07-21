@@ -136,9 +136,18 @@ jobs:
       - name: Download PDK 3.0.4a (Symbian^3 headers/libs)
         run: |
           set -e
-          echo "Скачиваю PDK с $PDK_URL ..."
-          curl -L --fail -o pdk.zip "$PDK_URL" \
-            || { echo "::error::Не удалось скачать PDK по указанному URL."; exit 1; }
+          echo "Скачиваю PDK с $PDK_URL (файл ~2.9 ГБ, archive.org иногда отдаёт 500 на большие файлы — делаю retry с резюмированием)..."
+          MAX_ATTEMPTS=8
+          attempt=1
+          until curl -L --fail -C - --retry 3 --retry-delay 5 -o pdk.zip "$PDK_URL"; do
+            if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
+              echo "::error::Не удалось скачать PDK с $PDK_URL после $MAX_ATTEMPTS попыток (archive.org стабильно отвечает ошибкой)."
+              exit 1
+            fi
+            echo "Попытка $attempt не удалась (вероятно, временная 500 от archive.org), жду перед повтором..."
+            sleep $((attempt * 15))
+            attempt=$((attempt + 1))
+          done
           ls -lh pdk.zip
 
       - name: Install 7-Zip (needed for PDK archives mislabeled as .zip)
