@@ -51,6 +51,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
+      - name: Free up disk space on the runner
+        run: |
+          set -e
+          # Стандартный ubuntu-latest раннер даёт ~14 ГБ свободного места,
+          # а наш пайплайн (клон Raptor, сборка GCC-тулчейна из исходников,
+          # распаковка PDK, сборка elf2e32/Raptor) легко превышает этот лимит
+          # ("No space left on device" в самом воркере GitHub Actions).
+          # Удаляем предустановленный софт, который нам точно не нужен.
+          echo "Место на диске до очистки:"
+          df -h /
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /usr/local/share/boost
+          sudo docker image prune -a -f 2>/dev/null || true
+          sudo apt-get clean
+          echo "Место на диске после очистки:"
+          df -h /
+
       - name: Checkout vNES sources
         uses: actions/checkout@v4
         with:
@@ -109,6 +130,13 @@ jobs:
             || { echo "::error::Сборка arm-none-symbianelf-gcc завершилась с ошибкой. См. build_gcce_toolchain.log."; exit 1; }
           echo "Готовый тулчейн:"
           ls -la ~/gcc-builds/gcc-12.1.0/bin | head -20
+          echo "Место на диске после сборки тулчейна:"
+          df -h /
+          echo "Чищу промежуточные build/исходники тулчейна (нужен только готовый ~/gcc-builds/gcc-12.1.0)..."
+          rm -rf /tmp/gcc4symbian
+          sudo apt-get clean
+          echo "Место на диске после очистки:"
+          df -h /
 
       - name: Verify arm-none-symbianelf-g++ toolchain
         id: gcce
@@ -328,6 +356,9 @@ jobs:
           cp "$BIN" "$GITHUB_WORKSPACE/epocroot/epoc32/tools/elf2e32"
           chmod +x "$GITHUB_WORKSPACE/epocroot/epoc32/tools/elf2e32"
           echo "elf2e32 собран и установлен: $GITHUB_WORKSPACE/epocroot/epoc32/tools/elf2e32"
+          cd /tmp/elf2e32-modern
+          rm -rf build
+          df -h /
 
       - name: Clone e32tools sources (makesis, petran)
         run: |
