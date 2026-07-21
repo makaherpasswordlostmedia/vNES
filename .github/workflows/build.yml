@@ -239,8 +239,19 @@ jobs:
           export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
           echo "Ищу собранные инструменты..."
           SBS=$(find "$GITHUB_WORKSPACE/epocroot" -iname "sbs" -type f 2>/dev/null | grep -v "\.pl$\|\.pm$" | head -n1 || true)
-          MAKESIS=$(find "$GITHUB_WORKSPACE/epocroot" -iname "makesis*" -type f -executable 2>/dev/null | head -n1 || true)
-          ELF2E32=$(find "$GITHUB_WORKSPACE/epocroot" -iname "elf2e32*" -type f -executable 2>/dev/null | head -n1 || true)
+          # Внутри symbian-build есть тестовые фикстуры с именами вроде
+          # makesis.exe/elf2e32 под .../tests/data/... (заглушки для юнит-тестов
+          # питоновских хелперов, не настоящие бинарники) — их нужно
+          # исключить, иначе find может найти фикстуру раньше настоящего
+          # инструмента и упаковка .sis молча ничего не создаст.
+          MAKESIS=$(find "$GITHUB_WORKSPACE/epocroot" -iname "makesis*" -type f -executable 2>/dev/null \
+            | grep -viE "/tests?/|/test_data/|/data/" | head -n1 || true)
+          ELF2E32=$(find "$GITHUB_WORKSPACE/epocroot" -iname "elf2e32*" -type f -executable 2>/dev/null \
+            | grep -viE "/tests?/|/test_data/|/data/" | head -n1 || true)
+          if [ -z "$MAKESIS" ]; then
+            echo "::warning::Не найден makesis вне тестовых фикстур, откатываюсь на первый попавшийся."
+            MAKESIS=$(find "$GITHUB_WORKSPACE/epocroot" -iname "makesis*" -type f -executable 2>/dev/null | head -n1 || true)
+          fi
           echo "sbs: $SBS"
           echo "makesis: $MAKESIS"
           echo "elf2e32: $ELF2E32"
@@ -344,6 +355,10 @@ jobs:
           echo "Найден .pkg: $PKG"
           "${{ steps.tools.outputs.makesis }}" "$PKG" build/vnes.sis \
             || { echo "::error::makesis завершился с ошибкой."; exit 1; }
+          if [ ! -f build/vnes.sis ]; then
+            echo "::error::makesis отработал без ошибки, но build/vnes.sis не создан (возможно, найден не тот makesis — см. шаг 'Locate sbs / makesis / elf2e32 binaries')."
+            exit 1
+          fi
           SIGNSIS=$(find epocroot -iname "signsis*" -type f -executable 2>/dev/null | head -n1 || true)
           if [ -n "$SIGNSIS" ]; then
             "$SIGNSIS" -S build/vnes.sis build/vnes_signed.sis cert/vnes.pem cert/vnes.key || \
