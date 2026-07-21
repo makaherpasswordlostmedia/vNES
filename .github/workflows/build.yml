@@ -344,6 +344,18 @@ jobs:
               sed -i '1i #include <string>' "$f"
             fi
           done
+          # stricmp/strnicmp — это MSVC/Windows-специфичные функции, их нет
+          # в glibc на Linux вообще (POSIX-эквиваленты — strcasecmp/
+          # strncasecmp из <strings.h>). Заменяем имена прямо в исходниках
+          # и подключаем <strings.h> туда, где они встречаются.
+          echo "Заменяю stricmp/strnicmp (MSVC-специфика) на strcasecmp/strncasecmp (POSIX)..."
+          for f in $(grep -lE '\b(stricmp|strnicmp)\s*\(' ../source/*.cpp ../source/*.h ../include/*.h 2>/dev/null); do
+            echo "  патчу $f"
+            sed -i -E 's/\bstrnicmp\b/strncasecmp/g; s/\bstricmp\b/strcasecmp/g' "$f"
+            if ! grep -q "#include <strings.h>" "$f"; then
+              sed -i '1i #include <strings.h>' "$f"
+            fi
+          done
           # Реальная ошибка (не warning, не -Werror-превращение) —
           # e32info.cpp:490 приводит разность указателей (64-битный
           # ptrdiff_t) напрямую к uint32_t, что GCC 13 в 64-битной сборке
