@@ -319,16 +319,23 @@ jobs:
           fi
           echo "Использую: $BLDINF"
           cd "$(dirname "$BLDINF")"
-          # elfdefs.h может лежать в отдельной подпапке e32tools (не всегда
-          # автоматически попадает в include-путь через bld.inf/MMP) —
-          # находим её явно и прокидываем через CPPFLAGS, чтобы компиляция
-          # elf2e32 не падала на "elfdefs.h: No such file or directory".
-          ELFDEFS_DIR=$(find "$GITHUB_WORKSPACE/epocroot/e32tools" -iname "elfdefs.h" -exec dirname {} \; | head -n1)
-          if [ -n "$ELFDEFS_DIR" ]; then
-            echo "Найден elfdefs.h в: $ELFDEFS_DIR"
-            export CPPFLAGS="-I$ELFDEFS_DIR"
+          # elfdefs.h лежит в отдельной подпапке e32tools, а pl_common.h
+          # инклюдит его как "elfdefs.h" (относительный путь, без
+          # подпапки) — Raptor не пробрасывает произвольные env-переменные
+          # (CPPFLAGS/CWFLAGS) в реальный вызов GCC для этого MMP, поэтому
+          # простое выставление -I не помогает. Копируем заголовок прямо
+          # в elf2e32/source/, где компилятор его гарантированно найдёт.
+          ELFDEFS=$(find "$GITHUB_WORKSPACE/epocroot/e32tools" -iname "elfdefs.h" | head -n1)
+          if [ -n "$ELFDEFS" ]; then
+            echo "Найден elfdefs.h: $ELFDEFS"
+            find "$GITHUB_WORKSPACE/epocroot/e32tools" -iname "*.cpp" -path "*elf2e32*" -exec dirname {} \; | sort -u | while read -r d; do
+              if [ ! -f "$d/elfdefs.h" ]; then
+                cp "$ELFDEFS" "$d/elfdefs.h"
+                echo "Скопировал elfdefs.h в $d"
+              fi
+            done
           else
-            echo "::warning::elfdefs.h не найден нигде в e32tools — сборка elf2e32, вероятно, снова упадёт."
+            echo "::warning::elfdefs.h не найден нигде в клонированном e32tools. Похоже, sparse-checkout 'e32tools' не включает подпапку с этим заголовком (в некоторых версиях дерева он лежит вне e32tools, напр. в общих SDK-заголовках). Нужно будет расширить sparse-checkout или скачать elfdefs.h отдельно."
           fi
           # Эти инструменты собираются как HOST-утилиты (запускаются на
           # сборочной машине, не на телефоне), поэтому используем sbs -c tools2
