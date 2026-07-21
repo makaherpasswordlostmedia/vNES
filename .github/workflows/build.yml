@@ -287,6 +287,19 @@ jobs:
           # поэтому передаём его явно через флаги компилятора.
           echo "Использования __LINUX__ в дереве (для диагностики):"
           grep -rn "__LINUX__" ../source | head -10 || true
+          # Ряд .cpp в этом дереве вызывает memcpy/memset/strlen/strcpy и т.п.,
+          # но не подключает <cstring> напрямую — раньше это "протекало"
+          # транзитивно через другие системные заголовки в старых libstdc++,
+          # но GCC 13 эти транзитивные инклюды убрал, отчего сборка падает с
+          # "‘memcpy’/‘memset’ was not declared in this scope". Патчим все
+          # затронутые исходники сразу, а не по одному через повторные прогоны CI.
+          echo "Проверяю .cpp файлы на использование <cstring>-функций без явного include..."
+          for f in $(grep -lE '\b(memcpy|memset|memmove|strlen|strcpy|strncpy|strcmp|strncmp|strcat)\s*\(' ../source/*.cpp 2>/dev/null); do
+            if ! grep -q "#include <cstring>" "$f"; then
+              echo "  добавляю #include <cstring> в $f"
+              sed -i '1i #include <cstring>' "$f"
+            fi
+          done
           cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-D__LINUX__" -DCMAKE_C_FLAGS="-D__LINUX__" 2>&1 | tee "$GITHUB_WORKSPACE/build_elf2e32.log" \
             || { echo "::error::cmake configure для elf2e32 завершился с ошибкой. См. build_elf2e32.log."; exit 1; }
           cmake --build . --config Release -j"$(nproc)" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_elf2e32.log" \
