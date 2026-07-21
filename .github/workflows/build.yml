@@ -232,6 +232,26 @@ jobs:
           perl -I. build_raptor.pl 2>&1 | tee "$GITHUB_WORKSPACE/build_raptor.log" \
             || { echo "::error::Сборка Raptor завершилась с ошибкой. См. build_raptor.log в артефактах."; exit 1; }
 
+      - name: Link host tools into Raptor's bin directory
+        run: |
+          set -e
+          # Raptor ожидает найти bash (и иногда другие host-инструменты)
+          # внутри собственной директории raptor/<platform>/bin/, а не
+          # просто в $PATH — это часть его self-check toolset'ов
+          # (raptor_data.py Tool.check). build_raptor.pl / prep_env.pl эту
+          # директорию не заполняют, поэтому линкуем системные бинарники
+          # туда вручную.
+          RAPTOR_BIN="$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/linux-x86_64/bin"
+          mkdir -p "$RAPTOR_BIN"
+          for tool in bash sh perl make; do
+            SYS_PATH=$(command -v "$tool" || true)
+            if [ -n "$SYS_PATH" ] && [ ! -e "$RAPTOR_BIN/$tool" ]; then
+              ln -s "$SYS_PATH" "$RAPTOR_BIN/$tool"
+              echo "Слинковал $tool -> $SYS_PATH"
+            fi
+          done
+          ls -la "$RAPTOR_BIN"
+
       - name: Clone e32tools sources (makesis, elf2e32, petran)
         run: |
           set -e
