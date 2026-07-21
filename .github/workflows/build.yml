@@ -277,7 +277,17 @@ jobs:
             || { echo "::error::Не удалось склонировать fedor4ever/elf2e32."; exit 1; }
           cd /tmp/elf2e32-modern
           mkdir -p build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release 2>&1 | tee "$GITHUB_WORKSPACE/build_elf2e32.log" \
+          # e32imagefile.cpp содержит:
+          #   #ifndef __LINUX__
+          #       #include <io.h>   // заголовок MSVC/MinGW, на Linux не существует
+          #   #endif
+          # Макрос __LINUX__ — не встроенный в GCC (в отличие от __linux__ с
+          # маленькой буквы) и должен выставляться сборочной системой; в
+          # этой версии CMakeLists.txt он, похоже, не определяется сам,
+          # поэтому передаём его явно через флаги компилятора.
+          echo "Использования __LINUX__ в дереве (для диагностики):"
+          grep -rn "__LINUX__" ../source | head -10 || true
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-D__LINUX__" -DCMAKE_C_FLAGS="-D__LINUX__" 2>&1 | tee "$GITHUB_WORKSPACE/build_elf2e32.log" \
             || { echo "::error::cmake configure для elf2e32 завершился с ошибкой. См. build_elf2e32.log."; exit 1; }
           cmake --build . --config Release -j"$(nproc)" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_elf2e32.log" \
             || { echo "::error::Сборка elf2e32 завершилась с ошибкой. См. build_elf2e32.log."; exit 1; }
