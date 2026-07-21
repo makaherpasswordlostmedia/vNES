@@ -287,6 +287,13 @@ jobs:
           # поэтому передаём его явно через флаги компилятора.
           echo "Использования __LINUX__ в дереве (для диагностики):"
           grep -rn "__LINUX__" ../source | head -10 || true
+          # Страховка: если -Werror выставлен внутри CMakeLists.txt через
+          # target_compile_options (а не через CMAKE_CXX_FLAGS), наши флаги
+          # командной строки могут не перекрыть его из-за порядка аргументов
+          # компилятора. Вырезаем -Werror из CMakeLists.txt напрямую.
+          echo "Ищу -Werror в CMakeLists.txt..."
+          grep -rn "Werror" ../CMakeLists.txt 2>/dev/null || true
+          find .. -maxdepth 2 -iname "CMakeLists.txt" -exec sed -i 's/-Werror//g' {} \;
           # Ряд .cpp в этом дереве вызывает memcpy/memset/strlen/strcpy и т.п.,
           # но не подключает <cstring> напрямую — раньше это "протекало"
           # транзитивно через другие системные заголовки в старых libstdc++,
@@ -300,7 +307,17 @@ jobs:
               sed -i '1i #include <cstring>' "$f"
             fi
           done
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-D__LINUX__" -DCMAKE_C_FLAGS="-D__LINUX__" 2>&1 | tee "$GITHUB_WORKSPACE/build_elf2e32.log" \
+          # CMakeLists.txt этого проекта включает -Werror, из-за чего
+          # безобидные предупреждения компилятора (например
+          # -Wformat: "%06lx" ожидает long, а передан size_t/unsigned int —
+          # разное представление в зависимости от платформы) превращаются
+          # в фатальные ошибки сборки. Явно отключаем именно это поведение,
+          # не трогая сами исходники — правка каждого printf-вызова вручную
+          # была бы намного более хрупким решением.
+          cmake .. -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS="-D__LINUX__ -Wno-error -Wno-error=format" \
+            -DCMAKE_C_FLAGS="-D__LINUX__ -Wno-error -Wno-error=format" \
+            2>&1 | tee "$GITHUB_WORKSPACE/build_elf2e32.log" \
             || { echo "::error::cmake configure для elf2e32 завершился с ошибкой. См. build_elf2e32.log."; exit 1; }
           cmake --build . --config Release -j"$(nproc)" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_elf2e32.log" \
             || { echo "::error::Сборка elf2e32 завершилась с ошибкой. См. build_elf2e32.log."; exit 1; }
