@@ -346,8 +346,13 @@ jobs:
             || { echo "::error::makesis завершился с ошибкой."; exit 1; }
           SIGNSIS=$(find epocroot -iname "signsis*" -type f -executable 2>/dev/null | head -n1 || true)
           if [ -n "$SIGNSIS" ]; then
-            "$SIGNSIS" -S build/vnes.sis build/vnes_signed.sis cert/vnes.pem cert/vnes.key \
-              && mv build/vnes_signed.sis build/vnes.sis
+            "$SIGNSIS" -S build/vnes.sis build/vnes_signed.sis cert/vnes.pem cert/vnes.key || \
+              echo "::warning::signsis завершился с ошибкой, .sis остаётся неподписанным."
+            if [ -f build/vnes_signed.sis ]; then
+              mv build/vnes_signed.sis build/vnes.sis
+            else
+              echo "::warning::signsis не создал build/vnes_signed.sis, .sis остаётся неподписанным."
+            fi
           else
             echo "::warning::signsis не найден, .sis остаётся неподписанным."
           fi
