@@ -232,6 +232,47 @@ jobs:
           perl -I. build_raptor.pl 2>&1 | tee "$GITHUB_WORKSPACE/build_raptor.log" \
             || { echo "::error::Сборка Raptor завершилась с ошибкой. См. build_raptor.log в артефактах."; exit 1; }
 
+      - name: Clone e32tools sources (makesis, elf2e32, petran)
+        run: |
+          set -e
+          # symbian-build (SymbianRevive) не включает makesis/elf2e32/signsis
+          # как готовые бинарники — только тестовые фикстуры с такими же
+          # именами файлов. Настоящие исходники этих утилит лежат в
+          # официальной ветке Symbian Linux Build System, в папке e32tools.
+          # Клонируем только её и собираем через уже поднятый Raptor.
+          echo "Клонирую e32tools из oss.FCL.interim.SFTools.LinuxBuild..."
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/SymbianSource/oss.FCL.interim.SFTools.LinuxBuild.git /tmp/sftools-linuxbuild \
+            || { echo "::error::Не удалось склонировать oss.FCL.interim.SFTools.LinuxBuild."; exit 1; }
+          cd /tmp/sftools-linuxbuild
+          git sparse-checkout set e32tools
+          echo "Копирую e32tools в epocroot/e32tools ..."
+          cp -r e32tools "$GITHUB_WORKSPACE/epocroot/e32tools"
+          find "$GITHUB_WORKSPACE/epocroot/e32tools" -maxdepth 2 -iname "bld.inf"
+
+      - name: Build e32tools (makesis, elf2e32, petran) with Raptor
+        working-directory: epocroot/e32tools
+        run: |
+          set -e
+          export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
+          export SBS_HOME="$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor"
+          export PATH="$SBS_HOME/bin:$PATH"
+          echo "Ищу bld.inf для сборки e32tools..."
+          BLDINF=$(find . -maxdepth 3 -iname "bld.inf" | head -n1)
+          if [ -z "$BLDINF" ]; then
+            echo "::error::Не найден bld.inf в e32tools — структура репозитория могла измениться."
+            exit 1
+          fi
+          echo "Использую: $BLDINF"
+          cd "$(dirname "$BLDINF")"
+          # Эти инструменты собираются как HOST-утилиты (запускаются на
+          # сборочной машине, не на телефоне), поэтому используем sbs -c tools2
+          # (стандартный алиас Raptor для host-side tools), а не armv5.
+          sbs -c tools2 2>&1 | tee "$GITHUB_WORKSPACE/build_e32tools.log" \
+            || { echo "::warning::Сборка e32tools через 'tools2' завершилась с ошибкой, пробую 'tools'."; \
+                 sbs -c tools 2>&1 | tee -a "$GITHUB_WORKSPACE/build_e32tools.log" || \
+                 echo "::warning::Обе попытки сборки e32tools завершились с ошибкой — makesis может остаться недоступным, см. build_e32tools.log."; }
+
       - name: Locate sbs / makesis / elf2e32 binaries
         id: tools
         run: |
@@ -243,11 +284,19 @@ jobs:
           # makesis.exe/elf2e32 под .../tests/data/... (заглушки для юнит-тестов
           # питоновских хелперов, не настоящие бинарники) — их нужно
           # исключить, иначе find может найти фикстуру раньше настоящего
-          # инструмента и упаковка .sis молча ничего не создаст.
-          MAKESIS=$(find "$GITHUB_WORKSPACE/epocroot" -iname "makesis*" -type f -executable 2>/dev/null \
-            | grep -viE "/tests?/|/test_data/|/data/" | head -n1 || true)
-          ELF2E32=$(find "$GITHUB_WORKSPACE/epocroot" -iname "elf2e32*" -type f -executable 2>/dev/null \
-            | grep -viE "/tests?/|/test_data/|/data/" | head -n1 || true)
+          # инструмента и упаковка .sis молча ничего не создаст. Также ищем
+          # в первую очередь в epoc32/tools, куда Raptor кладёт собранные
+          # host-утилиты (makesis из свежесобранного epocroot/e32tools).
+          MAKESIS=$(find "$GITHUB_WORKSPACE/epocroot/epoc32/tools" -iname "makesis*" -type f -executable 2>/dev/null | head -n1 || true)
+          if [ -z "$MAKESIS" ]; then
+            MAKESIS=$(find "$GITHUB_WORKSPACE/epocroot" -iname "makesis*" -type f -executable 2>/dev/null \
+              | grep -viE "/tests?/|/test_data/|/data/" | head -n1 || true)
+          fi
+          ELF2E32=$(find "$GITHUB_WORKSPACE/epocroot/epoc32/tools" -iname "elf2e32*" -type f -executable 2>/dev/null | head -n1 || true)
+          if [ -z "$ELF2E32" ]; then
+            ELF2E32=$(find "$GITHUB_WORKSPACE/epocroot" -iname "elf2e32*" -type f -executable 2>/dev/null \
+              | grep -viE "/tests?/|/test_data/|/data/" | head -n1 || true)
+          fi
           if [ -z "$MAKESIS" ]; then
             echo "::warning::Не найден makesis вне тестовых фикстур, откатываюсь на первый попавшийся."
             MAKESIS=$(find "$GITHUB_WORKSPACE/epocroot" -iname "makesis*" -type f -executable 2>/dev/null | head -n1 || true)
@@ -380,6 +429,7 @@ jobs:
           name: build-logs
           path: |
             build_raptor.log
+            build_e32tools.log
             build_vnes.log
           if-no-files-found: ignore
 
