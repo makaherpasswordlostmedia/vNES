@@ -70,6 +70,7 @@ jobs:
             perl python3 \
             build-essential \
             g++ gcc \
+            cmake \
             unzip zip wget \
             gcc-multilib g++-multilib \
             libgmp-dev libmpfr-dev libmpc-dev libisl-dev texinfo
@@ -252,14 +253,42 @@ jobs:
           done
           ls -la "$RAPTOR_BIN"
 
-      - name: Clone e32tools sources (makesis, elf2e32, petran)
+      - name: Build elf2e32 (modern CMake port)
         run: |
           set -e
-          # symbian-build (SymbianRevive) не включает makesis/elf2e32/signsis
-          # как готовые бинарники — только тестовые фикстуры с такими же
-          # именами файлов. Настоящие исходники этих утилит лежат в
-          # официальной ветке Symbian Linux Build System, в папке e32tools.
-          # Клонируем только её и собираем через уже поднятый Raptor.
+          # Ванильный elf2e32 (из oss.FCL.interim.SFTools.LinuxBuild) писан
+          # под GCC ~4.x и Raptor не пробрасывает флаги компилятора
+          # (-fpermissive, -I) в реальный вызов GCC для этого MMP — что
+          # вызывало бесконечную цепочку ошибок компиляции/заголовков.
+          # Вместо патчинга устаревшего кода используем готовый современный
+          # порт (C++14, собирается напрямую через CMake, без Raptor):
+          # https://github.com/fedor4ever/elf2e32
+          echo "Клонирую fedor4ever/elf2e32 (современный порт под GCC/CMake)..."
+          git clone --depth 1 https://github.com/fedor4ever/elf2e32.git /tmp/elf2e32-modern \
+            || { echo "::error::Не удалось склонировать fedor4ever/elf2e32."; exit 1; }
+          cd /tmp/elf2e32-modern
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release 2>&1 | tee "$GITHUB_WORKSPACE/build_elf2e32.log" \
+            || { echo "::error::cmake configure для elf2e32 завершился с ошибкой. См. build_elf2e32.log."; exit 1; }
+          cmake --build . --config Release -j"$(nproc)" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_elf2e32.log" \
+            || { echo "::error::Сборка elf2e32 завершилась с ошибкой. См. build_elf2e32.log."; exit 1; }
+          BIN=$(find . -maxdepth 2 -iname "elf2e32*" -type f -executable | head -n1)
+          if [ -z "$BIN" ]; then
+            echo "::error::Сборка elf2e32 прошла без ошибок, но бинарник не найден — проверьте build_elf2e32.log."
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/epocroot/epoc32/tools"
+          cp "$BIN" "$GITHUB_WORKSPACE/epocroot/epoc32/tools/elf2e32"
+          chmod +x "$GITHUB_WORKSPACE/epocroot/epoc32/tools/elf2e32"
+          echo "elf2e32 собран и установлен: $GITHUB_WORKSPACE/epocroot/epoc32/tools/elf2e32"
+
+      - name: Clone e32tools sources (makesis, petran)
+        run: |
+          set -e
+          # elf2e32 теперь собирается отдельно (см. предыдущий шаг), а
+          # makesis/petran по-прежнему берём из ванильного дерева и
+          # собираем через Raptor — они пока не вызывали таких проблем
+          # совместимости с современным GCC, как elf2e32.
           echo "Клонирую e32tools из oss.FCL.interim.SFTools.LinuxBuild..."
           git clone --depth 1 --filter=blob:none --sparse \
             https://github.com/SymbianSource/oss.FCL.interim.SFTools.LinuxBuild.git /tmp/sftools-linuxbuild \
@@ -268,33 +297,13 @@ jobs:
           git sparse-checkout set e32tools
           echo "Копирую e32tools в epocroot/e32tools ..."
           cp -r e32tools "$GITHUB_WORKSPACE/epocroot/e32tools"
+          # elf2e32 больше не собираем этим путём — исключаем его из
+          # группового bld.inf, если он там указан, чтобы Raptor не
+          # пытался собрать заведомо проблемный ванильный код.
+          rm -rf "$GITHUB_WORKSPACE/epocroot/e32tools/elf2e32"
           find "$GITHUB_WORKSPACE/epocroot/e32tools" -maxdepth 2 -iname "bld.inf"
 
-      - name: Patch e32tools for modern GCC compatibility
-        run: |
-          set -e
-          # farray.h вызывает verify(...) внутри шаблонного метода без
-          # предварительного объявления verify — раньше (GCC ~4.x) это
-          # проходило благодаря менее строгому two-phase lookup, а
-          # современный GCC (12+) требует -fpermissive или явное
-          # объявление. Raptor не пробрасывает CWFLAGS/-fpermissive в
-          # реальный вызов GCC для этого MMP, поэтому патчим сам источник:
-          # добавляем локальное forward-объявление verify как no-op assert
-          # прямо перед использованием, что сохраняет исходное поведение
-          # (verify == assert в оригинальном Symbian coreutils).
-          FARRAY="$GITHUB_WORKSPACE/epocroot/e32tools/elf2e32/source/farray.h"
-          if [ -f "$FARRAY" ]; then
-            if ! grep -q "^#define verify(x)" "$FARRAY"; then
-              sed -i '1i #include <cassert>\n#ifndef verify\n#define verify(x) assert(x)\n#endif' "$FARRAY"
-              echo "farray.h пропатчен: добавлено локальное определение verify(x)."
-            else
-              echo "farray.h уже содержит определение verify — пропускаю."
-            fi
-          else
-            echo "::warning::farray.h не найден по ожидаемому пути — если ошибка 'verify' повторится, проверьте актуальный путь."
-          fi
-
-      - name: Build e32tools (makesis, elf2e32, petran) with Raptor
+      - name: Build e32tools (makesis, petran) with Raptor
         working-directory: epocroot/e32tools
         run: |
           set -e
@@ -302,12 +311,6 @@ jobs:
           export SBS_HOME="$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor"
           export PATH="$SBS_HOME/bin:$PATH"
           echo "Ищу bld.inf для сборки e32tools..."
-          # Предпочитаем групповой bld.inf (обычно в e32tools/group), т.к.
-          # он собирает все подкомпоненты (elf2e32, petran, makesis, ...)
-          # вместе, с общими include-путями между ними (напр. elfdefs.h из
-          # соседнего модуля). Взятие первого попавшегося bld.inf из
-          # произвольного подкаталога может собрать один компонент в
-          # отрыве от нужных ему заголовков.
           BLDINF=$(find . -iname "bld.inf" -path "*/group/*" | head -n1)
           if [ -z "$BLDINF" ]; then
             echo "::warning::Групповой bld.inf не найден, беру первый попавшийся."
@@ -319,24 +322,6 @@ jobs:
           fi
           echo "Использую: $BLDINF"
           cd "$(dirname "$BLDINF")"
-          # elfdefs.h лежит в отдельной подпапке e32tools, а pl_common.h
-          # инклюдит его как "elfdefs.h" (относительный путь, без
-          # подпапки) — Raptor не пробрасывает произвольные env-переменные
-          # (CPPFLAGS/CWFLAGS) в реальный вызов GCC для этого MMP, поэтому
-          # простое выставление -I не помогает. Копируем заголовок прямо
-          # в elf2e32/source/, где компилятор его гарантированно найдёт.
-          ELFDEFS=$(find "$GITHUB_WORKSPACE/epocroot/e32tools" -iname "elfdefs.h" | head -n1)
-          if [ -n "$ELFDEFS" ]; then
-            echo "Найден elfdefs.h: $ELFDEFS"
-            find "$GITHUB_WORKSPACE/epocroot/e32tools" -iname "*.cpp" -path "*elf2e32*" -exec dirname {} \; | sort -u | while read -r d; do
-              if [ ! -f "$d/elfdefs.h" ]; then
-                cp "$ELFDEFS" "$d/elfdefs.h"
-                echo "Скопировал elfdefs.h в $d"
-              fi
-            done
-          else
-            echo "::warning::elfdefs.h не найден нигде в клонированном e32tools. Похоже, sparse-checkout 'e32tools' не включает подпапку с этим заголовком (в некоторых версиях дерева он лежит вне e32tools, напр. в общих SDK-заголовках). Нужно будет расширить sparse-checkout или скачать elfdefs.h отдельно."
-          fi
           # Эти инструменты собираются как HOST-утилиты (запускаются на
           # сборочной машине, не на телефоне), поэтому используем sbs -c tools2
           # (стандартный алиас Raptor для host-side tools), а не armv5.
@@ -364,10 +349,10 @@ jobs:
             MAKESIS=$(find "$GITHUB_WORKSPACE/epocroot" -iname "makesis*" -type f -executable 2>/dev/null \
               | grep -viE "/tests?/|/test_data/|/data/" | head -n1 || true)
           fi
-          ELF2E32=$(find "$GITHUB_WORKSPACE/epocroot/epoc32/tools" -iname "elf2e32*" -type f -executable 2>/dev/null | head -n1 || true)
-          if [ -z "$ELF2E32" ]; then
-            ELF2E32=$(find "$GITHUB_WORKSPACE/epocroot" -iname "elf2e32*" -type f -executable 2>/dev/null \
-              | grep -viE "/tests?/|/test_data/|/data/" | head -n1 || true)
+          ELF2E32="$GITHUB_WORKSPACE/epocroot/epoc32/tools/elf2e32"
+          if [ ! -x "$ELF2E32" ]; then
+            echo "::warning::elf2e32 не найден по ожидаемому пути после сборки (см. шаг 'Build elf2e32 (modern CMake port)')."
+            ELF2E32=""
           fi
           if [ -z "$MAKESIS" ]; then
             echo "::warning::Не найден makesis вне тестовых фикстур, откатываюсь на первый попавшийся."
@@ -501,6 +486,7 @@ jobs:
           name: build-logs
           path: |
             build_raptor.log
+            build_elf2e32.log
             build_e32tools.log
             build_vnes.log
           if-no-files-found: ignore
