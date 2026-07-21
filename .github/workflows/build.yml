@@ -322,17 +322,26 @@ jobs:
           echo "Ищу -Werror в CMakeLists.txt..."
           grep -rn "Werror" ../CMakeLists.txt 2>/dev/null || true
           find .. -maxdepth 2 -iname "CMakeLists.txt" -exec sed -i -E 's/-Werror(=[A-Za-z0-9_-]+)?//g' {} \;
-          # Ряд .cpp в этом дереве вызывает memcpy/memset/strlen/strcpy и т.п.,
-          # но не подключает <cstring> напрямую — раньше это "протекало"
-          # транзитивно через другие системные заголовки в старых libstdc++,
-          # но GCC 13 эти транзитивные инклюды убрал, отчего сборка падает с
-          # "‘memcpy’/‘memset’ was not declared in this scope". Патчим все
-          # затронутые исходники сразу, а не по одному через повторные прогоны CI.
-          echo "Проверяю .cpp файлы на использование <cstring>-функций без явного include..."
-          for f in $(grep -lE '\b(memcpy|memset|memmove|strlen|strcpy|strncpy|strcmp|strncmp|strcat)\s*\(' ../source/*.cpp 2>/dev/null); do
+          # Ряд файлов в этом дереве вызывает memcpy/memset/strlen/strcpy
+          # и т.п. (или использует std::string), но не подключает <cstring>
+          # / <string> напрямую — раньше это "протекало" транзитивно через
+          # другие системные заголовки в старых libstdc++, но GCC 13 эти
+          # транзитивные инклюды убрал, отчего сборка падает с
+          # "‘memcpy’/‘memset’ was not declared" или "‘string’ in namespace
+          # ‘std’ does not name a type". Патчим и .cpp, и .h/.hpp сразу
+          # (например pl_elfimage.h использует std::string без #include
+          # <string>), чтобы не гоняться по одному файлу за прогон CI.
+          echo "Проверяю .cpp/.h файлы на использование <cstring>/<string> без явного include..."
+          for f in $(grep -lE '\b(memcpy|memset|memmove|strlen|strcpy|strncpy|strcmp|strncmp|strcat)\s*\(' ../source/*.cpp ../source/*.h ../include/*.h 2>/dev/null); do
             if ! grep -q "#include <cstring>" "$f"; then
               echo "  добавляю #include <cstring> в $f"
               sed -i '1i #include <cstring>' "$f"
+            fi
+          done
+          for f in $(grep -lE '\bstd::string\b' ../source/*.cpp ../source/*.h ../include/*.h 2>/dev/null); do
+            if ! grep -q "#include <string>" "$f"; then
+              echo "  добавляю #include <string> в $f"
+              sed -i '1i #include <string>' "$f"
             fi
           done
           # Реальная ошибка (не warning, не -Werror-превращение) —
