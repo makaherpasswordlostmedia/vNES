@@ -278,19 +278,44 @@ jobs:
           export SBS_HOME="$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor"
           export PATH="$SBS_HOME/bin:$PATH"
           echo "Ищу bld.inf для сборки e32tools..."
-          BLDINF=$(find . -maxdepth 3 -iname "bld.inf" | head -n1)
+          # Предпочитаем групповой bld.inf (обычно в e32tools/group), т.к.
+          # он собирает все подкомпоненты (elf2e32, petran, makesis, ...)
+          # вместе, с общими include-путями между ними (напр. elfdefs.h из
+          # соседнего модуля). Взятие первого попавшегося bld.inf из
+          # произвольного подкаталога может собрать один компонент в
+          # отрыве от нужных ему заголовков.
+          BLDINF=$(find . -iname "bld.inf" -path "*/group/*" | head -n1)
+          if [ -z "$BLDINF" ]; then
+            echo "::warning::Групповой bld.inf не найден, беру первый попавшийся."
+            BLDINF=$(find . -maxdepth 3 -iname "bld.inf" | head -n1)
+          fi
           if [ -z "$BLDINF" ]; then
             echo "::error::Не найден bld.inf в e32tools — структура репозитория могла измениться."
             exit 1
           fi
           echo "Использую: $BLDINF"
           cd "$(dirname "$BLDINF")"
+          # elfdefs.h может лежать в отдельной подпапке e32tools (не всегда
+          # автоматически попадает в include-путь через bld.inf/MMP) —
+          # находим её явно и прокидываем через CPPFLAGS, чтобы компиляция
+          # elf2e32 не падала на "elfdefs.h: No such file or directory".
+          ELFDEFS_DIR=$(find "$GITHUB_WORKSPACE/epocroot/e32tools" -iname "elfdefs.h" -exec dirname {} \; | head -n1)
+          if [ -n "$ELFDEFS_DIR" ]; then
+            echo "Найден elfdefs.h в: $ELFDEFS_DIR"
+            export CPPFLAGS="-I$ELFDEFS_DIR"
+          else
+            echo "::warning::elfdefs.h не найден нигде в e32tools — сборка elf2e32, вероятно, снова упадёт."
+          fi
           # Эти инструменты собираются как HOST-утилиты (запускаются на
           # сборочной машине, не на телефоне), поэтому используем sbs -c tools2
           # (стандартный алиас Raptor для host-side tools), а не armv5.
-          sbs -c tools2 2>&1 | tee "$GITHUB_WORKSPACE/build_e32tools.log" \
+          # CWFLAGS=-fpermissive: старый код e32tools (farray.h и т.п.)
+          # писан под GCC ~4.x и не проходит строгий two-phase lookup для
+          # шаблонов в современном GCC без этого флага.
+          export CWFLAGS="-fpermissive"
+          sbs -c tools2 CWFLAGS="-fpermissive" 2>&1 | tee "$GITHUB_WORKSPACE/build_e32tools.log" \
             || { echo "::warning::Сборка e32tools через 'tools2' завершилась с ошибкой, пробую 'tools'."; \
-                 sbs -c tools 2>&1 | tee -a "$GITHUB_WORKSPACE/build_e32tools.log" || \
+                 sbs -c tools CWFLAGS="-fpermissive" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_e32tools.log" || \
                  echo "::warning::Обе попытки сборки e32tools завершились с ошибкой — makesis может остаться недоступным, см. build_e32tools.log."; }
 
       - name: Locate sbs / makesis / elf2e32 binaries
