@@ -270,6 +270,30 @@ jobs:
           cp -r e32tools "$GITHUB_WORKSPACE/epocroot/e32tools"
           find "$GITHUB_WORKSPACE/epocroot/e32tools" -maxdepth 2 -iname "bld.inf"
 
+      - name: Patch e32tools for modern GCC compatibility
+        run: |
+          set -e
+          # farray.h вызывает verify(...) внутри шаблонного метода без
+          # предварительного объявления verify — раньше (GCC ~4.x) это
+          # проходило благодаря менее строгому two-phase lookup, а
+          # современный GCC (12+) требует -fpermissive или явное
+          # объявление. Raptor не пробрасывает CWFLAGS/-fpermissive в
+          # реальный вызов GCC для этого MMP, поэтому патчим сам источник:
+          # добавляем локальное forward-объявление verify как no-op assert
+          # прямо перед использованием, что сохраняет исходное поведение
+          # (verify == assert в оригинальном Symbian coreutils).
+          FARRAY="$GITHUB_WORKSPACE/epocroot/e32tools/elf2e32/source/farray.h"
+          if [ -f "$FARRAY" ]; then
+            if ! grep -q "^#define verify(x)" "$FARRAY"; then
+              sed -i '1i #include <cassert>\n#ifndef verify\n#define verify(x) assert(x)\n#endif' "$FARRAY"
+              echo "farray.h пропатчен: добавлено локальное определение verify(x)."
+            else
+              echo "farray.h уже содержит определение verify — пропускаю."
+            fi
+          else
+            echo "::warning::farray.h не найден по ожидаемому пути — если ошибка 'verify' повторится, проверьте актуальный путь."
+          fi
+
       - name: Build e32tools (makesis, elf2e32, petran) with Raptor
         working-directory: epocroot/e32tools
         run: |
@@ -309,13 +333,9 @@ jobs:
           # Эти инструменты собираются как HOST-утилиты (запускаются на
           # сборочной машине, не на телефоне), поэтому используем sbs -c tools2
           # (стандартный алиас Raptor для host-side tools), а не armv5.
-          # CWFLAGS=-fpermissive: старый код e32tools (farray.h и т.п.)
-          # писан под GCC ~4.x и не проходит строгий two-phase lookup для
-          # шаблонов в современном GCC без этого флага.
-          export CWFLAGS="-fpermissive"
-          sbs -c tools2 CWFLAGS="-fpermissive" 2>&1 | tee "$GITHUB_WORKSPACE/build_e32tools.log" \
+          sbs -c tools2 2>&1 | tee "$GITHUB_WORKSPACE/build_e32tools.log" \
             || { echo "::warning::Сборка e32tools через 'tools2' завершилась с ошибкой, пробую 'tools'."; \
-                 sbs -c tools CWFLAGS="-fpermissive" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_e32tools.log" || \
+                 sbs -c tools 2>&1 | tee -a "$GITHUB_WORKSPACE/build_e32tools.log" || \
                  echo "::warning::Обе попытки сборки e32tools завершились с ошибкой — makesis может остаться недоступным, см. build_e32tools.log."; }
 
       - name: Locate sbs / makesis / elf2e32 binaries
