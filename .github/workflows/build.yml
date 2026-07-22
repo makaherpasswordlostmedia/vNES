@@ -388,14 +388,18 @@ jobs:
           # makesis/petran по-прежнему берём из ванильного дерева и
           # собираем через Raptor — они пока не вызывали таких проблем
           # совместимости с современным GCC, как elf2e32.
-          echo "Клонирую e32tools из oss.FCL.interim.SFTools.LinuxBuild..."
+          echo "Клонирую e32tools (+ imgtools, от которого зависят seclib/setcap) из oss.FCL.interim.SFTools.LinuxBuild..."
           git clone --depth 1 --filter=blob:none --sparse \
             https://github.com/SymbianSource/oss.FCL.interim.SFTools.LinuxBuild.git /tmp/sftools-linuxbuild \
             || { echo "::error::Не удалось склонировать oss.FCL.interim.SFTools.LinuxBuild."; exit 1; }
           cd /tmp/sftools-linuxbuild
-          git sparse-checkout set e32tools
-          echo "Копирую e32tools в epocroot/e32tools ..."
+          # imgtools нужен как зависимость (seclib.cpp includes e32image.h,
+          # setcap.cpp includes h_utl.h — оба физически лежат в imgtools/imglib),
+          # даже если сами imgtools-инструменты нам не нужны.
+          git sparse-checkout set e32tools imgtools
+          echo "Копирую e32tools и imgtools в epocroot/ ..."
           cp -r e32tools "$GITHUB_WORKSPACE/epocroot/e32tools"
+          cp -r imgtools "$GITHUB_WORKSPACE/epocroot/imgtools"
           # elf2e32 больше не собираем этим путём — исключаем его из
           # группового bld.inf, если он там указан, чтобы Raptor не
           # пытался собрать заведомо проблемный ванильный код.
@@ -409,25 +413,28 @@ jobs:
           export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
           export SBS_HOME="$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor"
           export PATH="$SBS_HOME/bin:$PATH"
-          echo "Ищу bld.inf для сборки e32tools..."
-          BLDINF=$(find . -iname "bld.inf" -path "*/group/*" | head -n1)
-          if [ -z "$BLDINF" ]; then
-            echo "::warning::Групповой bld.inf не найден, беру первый попавшийся."
-            BLDINF=$(find . -maxdepth 3 -iname "bld.inf" | head -n1)
-          fi
-          if [ -z "$BLDINF" ]; then
-            echo "::error::Не найден bld.inf в e32tools — структура репозитория могла измениться."
-            exit 1
-          fi
-          echo "Использую: $BLDINF"
-          cd "$(dirname "$BLDINF")"
-          # Эти инструменты собираются как HOST-утилиты (запускаются на
-          # сборочной машине, не на телефоне), поэтому используем sbs -c tools2
-          # (стандартный алиас Raptor для host-side tools), а не armv5.
-          sbs -c tools2 2>&1 | tee "$GITHUB_WORKSPACE/build_e32tools.log" \
-            || { echo "::warning::Сборка e32tools через 'tools2' завершилась с ошибкой, пробую 'tools'."; \
-                 sbs -c tools 2>&1 | tee -a "$GITHUB_WORKSPACE/build_e32tools.log" || \
-                 echo "::warning::Обе попытки сборки e32tools завершились с ошибкой — makesis может остаться недоступным, см. build_e32tools.log."; }
+          # Собираем makesis и petran по отдельности через их собственные
+          # bld.inf, а не общий групповой bld.inf всего e32tools — общий
+          # bld.inf тащит и seclib/setcap, которые зависят от imgtools и
+          # могут падать независимо от того, собрался ли реально нужный
+          # нам makesis. Так сбой в одном компоненте не маскирует и не
+          # блокирует сборку другого.
+          echo "Компоненты внутри e32tools:"
+          find . -maxdepth 2 -iname "bld.inf"
+          for tool in makesis petran; do
+            BLDINF=$(find . -maxdepth 3 -ipath "*$tool*/group/bld.inf" | head -n1)
+            if [ -z "$BLDINF" ]; then
+              BLDINF=$(find . -maxdepth 3 -ipath "*$tool*bld.inf" | head -n1)
+            fi
+            if [ -z "$BLDINF" ]; then
+              echo "::warning::bld.inf для $tool не найден — пропускаю."
+              continue
+            fi
+            echo "Собираю $tool из $BLDINF (конфигурация tools2)..."
+            (cd "$(dirname "$BLDINF")" && \
+              sbs -c tools2 2>&1 | tee -a "$GITHUB_WORKSPACE/build_e32tools.log") \
+              || echo "::warning::Сборка $tool через tools2 завершилась с ошибкой, см. build_e32tools.log."
+          done
 
       - name: Locate sbs / makesis / elf2e32 binaries
         id: tools
@@ -505,21 +512,6 @@ jobs:
           fi
           echo "Итоговое содержимое $PLATFORM_DIR/bin:"
           ls -la "$PLATFORM_DIR/bin"
-
-      - name: List available Raptor build configurations
-        working-directory: vnes-src/src/group
-        run: |
-          export EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
-          export SBS_HOME="${{ steps.tools.outputs.sbs_home }}"
-          export PATH="$SBS_HOME/bin:${{ steps.gcce.outputs.gcce_bin_dir }}:$PATH"
-          # Raptor's evaluator требует SBS_GCCE<version>BIN, указывающий на
-          # bin/ реального ARM GCCE-тулчейна (см. UninitialisedVariableException).
-          export "SBS_GCCE${{ steps.gcce.outputs.gcce_ver_key }}BIN"="${{ steps.gcce.outputs.gcce_bin_dir }}"
-          echo "Валидные алиасы конфигураций в этой сборке Raptor:"
-          "${{ steps.tools.outputs.sbs }}" --alias || true
-          echo "---"
-          echo "Общая справка sbs:"
-          "${{ steps.tools.outputs.sbs }}" --help || true
 
       - name: Build vNES with sbs
         working-directory: vnes-src/src/group
