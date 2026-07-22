@@ -598,6 +598,12 @@ jobs:
           find "$GITHUB_WORKSPACE/epocroot/epoc32/build" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
           echo "--- Содержимое Makefile_all.target (если существует) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
           find "$GITHUB_WORKSPACE/epocroot/epoc32/build" -iname "Makefile_all.target" -exec cat {} \; 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- Содержимое bldinf.p_*.d (что Raptor распознал из bld.inf) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          find "$GITHUB_WORKSPACE/epocroot/epoc32/build" -iname "bldinf.p_*.d" -exec cat {} \; 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- Содержимое toolcheck_cache_.tmp (результат проверки toolset) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          find "$GITHUB_WORKSPACE/epocroot/epoc32/build" -iname "toolcheck_cache*" -exec cat {} \; 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- Содержимое Makefile_all (главный, показывает какие подцели считаются нужными) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          find "$GITHUB_WORKSPACE/epocroot/epoc32/build" -iname "Makefile_all" ! -iname "*.stderr" -exec cat {} \; 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
 
       - name: Verify vNES binaries were actually built
         run: |
