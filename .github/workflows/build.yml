@@ -557,19 +557,15 @@ jobs:
           # arm.v5.urel.gcce4_4_1 (см. akaWolf-Wiki Fshell/Getting Started).
           # Версия компилятора у нас — 12.1.0 (та же, что задаёт
           # SBS_GCCE1210BIN), поэтому используем arm.v5.urel.gcce12_1_0.
-          # -d включает подробный debug-вывод Raptor: если компонент снова
-          # будет пропущен без ошибок, в debug-выводе будет видно, на каком
-          # этапе (evaluator/filter/makefile generation) это происходит.
-          "${{ steps.tools.outputs.sbs }}" -b bld.inf -c arm.v5.urel.gcce12_1_0 -d -f- 2>&1 | tee "$GITHUB_WORKSPACE/build_vnes.log" \
-            || { echo "::warning::arm.v5.urel.gcce12_1_0 не сработал, пробую arm.v5.urel.gcce..."; \
-                 "${{ steps.tools.outputs.sbs }}" -b bld.inf -c arm.v5.urel.gcce 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" \
-                   || { echo "::warning::arm.v5.urel.gcce не сработал, пробую gcce.urel..."; \
-                        "${{ steps.tools.outputs.sbs }}" -b bld.inf -c gcce.urel 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" \
-                          || { echo "::error::Все варианты конфигурации GCCE не сработали. См. build_vnes.log."; exit 1; }; }; }
-          echo "--- Содержимое сгенерированного Makefile.*.log (если есть) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
-          find "$GITHUB_WORKSPACE/epocroot/epoc32/build" -iname "Makefile.*.log" -exec cat {} \; 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
-          echo "--- Список всех файлов, реально созданных под epoc32/build ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
-          find "$GITHUB_WORKSPACE/epocroot/epoc32/build" -type f 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          # Найдена реальная причина "0 секунд, no warnings or errors":
+          # без явной цели sbs выполнял только стандартный набор
+          # (EXPORT/BITMAP/RESOURCE_DEPS/RESOURCE/default-ALL) — ни один
+          # из них не компилирует .cpp в .o и не линкует .exe. Цель,
+          # которая это делает — TARGET (см. usage sbs: "TARGET Create
+          # main executables") — не включена в дефолтный набор и должна
+          # быть указана явно.
+          "${{ steps.tools.outputs.sbs }}" -b bld.inf -c arm.v5.urel.gcce12_1_0 TARGET 2>&1 | tee "$GITHUB_WORKSPACE/build_vnes.log" \
+            || { echo "::error::Компиляция vNES завершилась с ошибкой. См. build_vnes.log."; exit 1; }
 
       - name: Verify vNES binaries were actually built
         run: |
