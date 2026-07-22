@@ -594,6 +594,8 @@ jobs:
           # содержимое самого makefile для целевой платформы/конфигурации.
           echo "--- Список Makefile_all.* в epoc32/build ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
           find "$GITHUB_WORKSPACE/epocroot/epoc32/build" -iname "Makefile_all*" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          echo "--- Содержимое основного XML build-лога Raptor (Makefile.<timestamp>.log) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          find "$GITHUB_WORKSPACE/epocroot/epoc32/build" -iname "Makefile.20*.log" -exec cat {} \; 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
           echo "--- Вся структура epoc32/build (для диагностики) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
           find "$GITHUB_WORKSPACE/epocroot/epoc32/build" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
           echo "--- Содержимое Makefile_all.target (если существует) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
