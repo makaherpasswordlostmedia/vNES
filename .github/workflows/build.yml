@@ -583,8 +583,21 @@ jobs:
           # быть указана явно.
           echo "--- Основная сборка: TARGET (единственный вызов, чистый кэш) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
           echo "Абсолютный путь к bld.inf: $(pwd)/bld.inf"
-          "${{ steps.tools.outputs.sbs }}" -b "$(pwd)/bld.inf" -c arm.v5.urel.gcce12_1_0 -d TARGET 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" \
+          "${{ steps.tools.outputs.sbs }}" -b "$(pwd)/bld.inf" -c arm.v5.urel.gcce12_1_0 TARGET 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" \
             || { echo "::error::Компиляция vNES завершилась с ошибкой. См. build_vnes.log."; exit 1; }
+          # -d по неясной причине не даёт debug-вывода в этой версии/сборке
+          # Raptor (несмотря на то что usage sbs его документирует). Вместо
+          # гадания с флагами — смотрим напрямую на то, что Raptor реально
+          # сгенерировал: список Makefile_all.* (какие подцели существуют —
+          # если среди них нет .target, значит компонент в принципе не
+          # прошёл этап makefile generation для реальной компиляции) и
+          # содержимое самого makefile для целевой платформы/конфигурации.
+          echo "--- Список Makefile_all.* в epoc32/build ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          find "$GITHUB_WORKSPACE/epocroot/epoc32/build" -iname "Makefile_all*" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          echo "--- Вся структура epoc32/build (для диагностики) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          find "$GITHUB_WORKSPACE/epocroot/epoc32/build" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          echo "--- Содержимое Makefile_all.target (если существует) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          find "$GITHUB_WORKSPACE/epocroot/epoc32/build" -iname "Makefile_all.target" -exec cat {} \; 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
 
       - name: Verify vNES binaries were actually built
         run: |
