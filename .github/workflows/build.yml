@@ -560,14 +560,16 @@ jobs:
           # -d включает подробный debug-вывод Raptor: если компонент снова
           # будет пропущен без ошибок, в debug-выводе будет видно, на каком
           # этапе (evaluator/filter/makefile generation) это происходит.
-          "${{ steps.tools.outputs.sbs }}" -b bld.inf -c arm.v5.urel.gcce12_1_0 -d 2>&1 | tee "$GITHUB_WORKSPACE/build_vnes.log" \
+          "${{ steps.tools.outputs.sbs }}" -b bld.inf -c arm.v5.urel.gcce12_1_0 -d -f- 2>&1 | tee "$GITHUB_WORKSPACE/build_vnes.log" \
             || { echo "::warning::arm.v5.urel.gcce12_1_0 не сработал, пробую arm.v5.urel.gcce..."; \
                  "${{ steps.tools.outputs.sbs }}" -b bld.inf -c arm.v5.urel.gcce 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" \
                    || { echo "::warning::arm.v5.urel.gcce не сработал, пробую gcce.urel..."; \
                         "${{ steps.tools.outputs.sbs }}" -b bld.inf -c gcce.urel 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" \
                           || { echo "::error::Все варианты конфигурации GCCE не сработали. См. build_vnes.log."; exit 1; }; }; }
-          echo "--- Содержимое сгенерированного Makefile.*.log (если есть) ---"
-          find "$GITHUB_WORKSPACE/epocroot/epoc32/build" -iname "Makefile.*.log" -exec tail -100 {} \; 2>/dev/null || true
+          echo "--- Содержимое сгенерированного Makefile.*.log (если есть) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          find "$GITHUB_WORKSPACE/epocroot/epoc32/build" -iname "Makefile.*.log" -exec cat {} \; 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- Список всех файлов, реально созданных под epoc32/build ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          find "$GITHUB_WORKSPACE/epocroot/epoc32/build" -type f 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
 
       - name: Verify vNES binaries were actually built
         run: |
