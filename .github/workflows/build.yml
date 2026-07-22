@@ -525,6 +525,23 @@ jobs:
           echo "Итоговое содержимое $PLATFORM_DIR/bin:"
           ls -la "$PLATFORM_DIR/bin"
 
+      - name: Symlink /epoc32 -> real EPOCROOT/epoc32
+        run: |
+          set -e
+          # vnes.mmp (и, вероятно, другие .mmp/.rss в дереве Raptor) используют
+          # SYSTEMINCLUDE /epoc32/include — абсолютный путь от корня файловой
+          # системы. Такой синтаксис предполагает классическую Symbian-машину,
+          # где EPOCROOT смонтирован как "/" (см. akaWolf-Wiki: "if your
+          # EPOCROOT is / (as is typical), your SYSTEMINCLUDE path will be
+          # /epoc32/include/stdapis"). У нас EPOCROOT — это подкаталог
+          # $GITHUB_WORKSPACE/epocroot/, а не "/", поэтому /epoc32/include
+          # физически не существовал — судя по всему, именно из-за этого
+          # Raptor молча не находил валидный toolset/цель для сборки и
+          # отрабатывал "0 секунд, no warnings or errors" без явной ошибки.
+          echo "Создаю симлинк /epoc32 -> $GITHUB_WORKSPACE/epocroot/epoc32 ..."
+          sudo ln -sfn "$GITHUB_WORKSPACE/epocroot/epoc32" /epoc32
+          ls -la /epoc32/include | head -5
+
       - name: Build vNES with sbs
         working-directory: vnes-src/src/group
         run: |
