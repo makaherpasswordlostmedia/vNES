@@ -581,7 +581,25 @@ jobs:
           # которая это делает — TARGET (см. usage sbs: "TARGET Create
           # main executables") — не включена в дефолтный набор и должна
           # быть указана явно.
-          echo "--- Основная сборка: TARGET (единственный вызов, чистый кэш) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          echo "--- Проверка epoc32/tools/variant/variant.cfg (ENABLE_ABIV2_MODE) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          # akaWolf-Wiki Raptor Quick Start troubleshooting checklist:
+          # "Check that the EPOCROOT directory contains the file
+          # epoc32/tools/variant/variant.cfg and that the file includes:
+          # epoc32\include\variant\Symbian_OS.hrh ENABLE_ABIV2_MODE" —
+          # без этого Raptor может успешно распарсить bld.inf, но не
+          # сгенерировать makefile для реальной ARM-компиляции (что
+          # совпадает с нашим симптомом: discovery находит только 5
+          # generic makefile'ов, без .target).
+          VARIANT_CFG="$GITHUB_WORKSPACE/epocroot/epoc32/tools/variant/variant.cfg"
+          if [ -f "$VARIANT_CFG" ]; then
+            echo "variant.cfg найден, содержимое:" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+            cat "$VARIANT_CFG" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          else
+            echo "variant.cfg НЕ НАЙДЕН по пути $VARIANT_CFG — создаю согласно требованию Raptor." | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+            mkdir -p "$(dirname "$VARIANT_CFG")"
+            echo 'epoc32\include\variant\Symbian_OS.hrh ENABLE_ABIV2_MODE' > "$VARIANT_CFG"
+            cat "$VARIANT_CFG" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          fi
           echo "Абсолютный путь к bld.inf: $(pwd)/bld.inf"
           "${{ steps.tools.outputs.sbs }}" -b "$(pwd)/bld.inf" -c arm.v5.urel.gcce12_1_0 TARGET 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" \
             || { echo "::error::Компиляция vNES завершилась с ошибкой. См. build_vnes.log."; exit 1; }
