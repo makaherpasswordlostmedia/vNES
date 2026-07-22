@@ -539,17 +539,25 @@ jobs:
           echo "SBS_GCCE${{ steps.gcce.outputs.gcce_ver_key }}BIN=${{ steps.gcce.outputs.gcce_bin_dir }}"
           echo "Собираю из group/bld.inf (нативный Symbian-фронтенд, написан вручную взамен Qt)."
           ls -la
-          # gcce_urel не является валидной конфигурацией/алиасом Raptor
-          # (см. "sbs: error: Unknown build configuration 'gcce_urel'").
-          # Стандартный алиас GCCE-сборки в Raptor — armv5_urel, который
-          # разворачивается в arm.v5.urel.gcce (см. документацию Raptor).
-          # -b bld.inf указан явно и обязателен: без него sbs отрабатывал
-          # за "0 секунд" с "no warnings or errors", не находя ни одного
-          # компонента для сборки (см. usage самого sbs: "sbs -b my/group/
-          # bld.inf -c armv5"). set -o pipefail обязателен: без него код
-          # возврата sbs терялся бы за успешным кодом возврата tee.
-          "${{ steps.tools.outputs.sbs }}" -b bld.inf -c armv5_urel 2>&1 | tee "$GITHUB_WORKSPACE/build_vnes.log" \
-            || { echo "::error::Компиляция vNES завершилась с ошибкой. См. build_vnes.log."; exit 1; }
+          # Короткий алиас armv5_urel разворачивается Raptor'ом в
+          # arm.v5.urel.rvct2_2 — то есть RVCT-компилятор, а не GCCE
+          # (см. akaWolf-Wiki: "wherever armv5_urel is used, Raptor will
+          # know that is really means arm.v5.urel.rvct2_2"). Наш bld.inf
+          # заявляет "PRJ_PLATFORMS GCCE" — платформу, отличную от RVCT,
+          # поэтому Raptor тихо пропускал компонент ("no warnings or
+          # errors", "Run time 0 seconds"), не находя для него совпадающей
+          # конфигурации, вместо явной ошибки.
+          # Правильный синтаксис для GCCE — полное имя конфигурации
+          # arm.v5.<variant>.gcce<version_with_underscores>, например
+          # arm.v5.urel.gcce4_4_1 (см. akaWolf-Wiki Fshell/Getting Started).
+          # Версия компилятора у нас — 12.1.0 (та же, что задаёт
+          # SBS_GCCE1210BIN), поэтому используем arm.v5.urel.gcce12_1_0.
+          "${{ steps.tools.outputs.sbs }}" -b bld.inf -c arm.v5.urel.gcce12_1_0 2>&1 | tee "$GITHUB_WORKSPACE/build_vnes.log" \
+            || { echo "::warning::arm.v5.urel.gcce12_1_0 не сработал, пробую arm.v5.urel.gcce..."; \
+                 "${{ steps.tools.outputs.sbs }}" -b bld.inf -c arm.v5.urel.gcce 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" \
+                   || { echo "::warning::arm.v5.urel.gcce не сработал, пробую gcce.urel..."; \
+                        "${{ steps.tools.outputs.sbs }}" -b bld.inf -c gcce.urel 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" \
+                          || { echo "::error::Все варианты конфигурации GCCE не сработали. См. build_vnes.log."; exit 1; }; }; }
 
       - name: Verify vNES binaries were actually built
         run: |
