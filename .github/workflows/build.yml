@@ -539,6 +539,11 @@ jobs:
           echo "SBS_GCCE${{ steps.gcce.outputs.gcce_ver_key }}BIN=${{ steps.gcce.outputs.gcce_bin_dir }}"
           echo "Собираю из group/bld.inf (нативный Symbian-фронтенд, написан вручную взамен Qt)."
           ls -la
+          # На случай, если Raptor считает цель "up-to-date" по кэшу из
+          # предыдущего прогона (что тоже дало бы "0 секунд, no warnings")
+          # — явно чистим build-кэш перед реальной попыткой сборки.
+          echo "Чищу возможный кэш предыдущих сборок в epoc32/build..."
+          rm -rf "$GITHUB_WORKSPACE/epocroot/epoc32/build"
           # Короткий алиас armv5_urel разворачивается Raptor'ом в
           # arm.v5.urel.rvct2_2 — то есть RVCT-компилятор, а не GCCE
           # (см. akaWolf-Wiki: "wherever armv5_urel is used, Raptor will
@@ -552,12 +557,17 @@ jobs:
           # arm.v5.urel.gcce4_4_1 (см. akaWolf-Wiki Fshell/Getting Started).
           # Версия компилятора у нас — 12.1.0 (та же, что задаёт
           # SBS_GCCE1210BIN), поэтому используем arm.v5.urel.gcce12_1_0.
-          "${{ steps.tools.outputs.sbs }}" -b bld.inf -c arm.v5.urel.gcce12_1_0 2>&1 | tee "$GITHUB_WORKSPACE/build_vnes.log" \
+          # -d включает подробный debug-вывод Raptor: если компонент снова
+          # будет пропущен без ошибок, в debug-выводе будет видно, на каком
+          # этапе (evaluator/filter/makefile generation) это происходит.
+          "${{ steps.tools.outputs.sbs }}" -b bld.inf -c arm.v5.urel.gcce12_1_0 -d 2>&1 | tee "$GITHUB_WORKSPACE/build_vnes.log" \
             || { echo "::warning::arm.v5.urel.gcce12_1_0 не сработал, пробую arm.v5.urel.gcce..."; \
                  "${{ steps.tools.outputs.sbs }}" -b bld.inf -c arm.v5.urel.gcce 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" \
                    || { echo "::warning::arm.v5.urel.gcce не сработал, пробую gcce.urel..."; \
                         "${{ steps.tools.outputs.sbs }}" -b bld.inf -c gcce.urel 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" \
                           || { echo "::error::Все варианты конфигурации GCCE не сработали. См. build_vnes.log."; exit 1; }; }; }
+          echo "--- Содержимое сгенерированного Makefile.*.log (если есть) ---"
+          find "$GITHUB_WORKSPACE/epocroot/epoc32/build" -iname "Makefile.*.log" -exec tail -100 {} \; 2>/dev/null || true
 
       - name: Verify vNES binaries were actually built
         run: |
