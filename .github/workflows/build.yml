@@ -601,10 +601,10 @@ jobs:
             cat "$VARIANT_CFG" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
           fi
           echo "Абсолютный путь к bld.inf: $(pwd)/bld.inf"
-          echo "--- Поиск в исходниках Raptor того, что печатает 'discovery' и генерирует список makefile'ов ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
-          grep -rn "discovery" "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/"*.py 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
-          echo "--- Поиск функций, решающих какие типы makefile (export/bitmap/target/...) нужны для компонента ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
-          grep -rln "class.*Makefile\|def.*[Mm]akefiles\b" "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/"*.py 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- raptor.py: контекст вокруг discovery_string (строка 1122), где формируется список makefile-объектов ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          sed -n '1080,1130p' "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/raptor.py" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- raptor_makefile.py: поиск 'target'/'export'/'bitmap' (какие типы makefile определены и от чего зависят) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          grep -n "'target'\|\"target\"\|MakefileTarget\|hasTarget\|iTarget\b" "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/raptor_makefile.py" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
           echo "--- Проверка наличия LIBRARY-зависимостей из vnes.mmp в EPOCROOT ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
           for lib in euser apparc cone eikcore avkon fbscli ws32 gdi bafl efsrv estor; do
             FOUND_LIB=$(find "$GITHUB_WORKSPACE/epocroot/epoc32" -iname "${lib}.lib" -o -iname "${lib}.dso" 2>/dev/null | head -n1)
