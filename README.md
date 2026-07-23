@@ -8,4 +8,4 @@ If you're looking for the actual README, [version 2.13 has one](https://github.c
 
 [JSNES](https://github.com/bfirsh/jsnes) is based on this emulator.
 
-port to j2me by sheva
+port to j2me & symbian by sheva
