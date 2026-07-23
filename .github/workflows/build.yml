@@ -607,11 +607,14 @@ jobs:
           grep -n "for spec in\|GetSpecs\|def Write\b\|def WriteMakefiles\|self.specs\b" "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/raptor_make.py" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
           echo "--- Полный метод, непосредственно вызывающий WriteConfiguredSpec (30 строк контекста) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
           grep -n "WriteConfiguredSpec(" -B25 "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/raptor_make.py" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
-          echo "--- Проверка наличия LIBRARY-зависимостей из vnes.mmp в EPOCROOT ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          echo "--- Дерево epoc32/release (все платформы, какие реально распакованы из PDK) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          find "$GITHUB_WORKSPACE/epocroot/epoc32/release" -maxdepth 2 -type d 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          echo "--- Проверка наличия LIBRARY-зависимостей из vnes.mmp под ARM/GCCE (не WINSCW-эмулятор) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
           for lib in euser apparc cone eikcore avkon fbscli ws32 gdi bafl efsrv estor; do
-            FOUND_LIB=$(find "$GITHUB_WORKSPACE/epocroot/epoc32" -iname "${lib}.lib" -o -iname "${lib}.dso" 2>/dev/null | head -n1)
+            FOUND_LIB=$(find "$GITHUB_WORKSPACE/epocroot/epoc32/release" \( -path "*armv5*" -o -path "*arm4*" -o -path "*gcce*" \) \
+              \( -iname "${lib}.lib" -o -iname "${lib}.dso" \) 2>/dev/null | head -n1)
             if [ -z "$FOUND_LIB" ]; then
-              echo "  ОТСУТСТВУЕТ: ${lib}.lib/.dso" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+              echo "  ОТСУТСТВУЕТ под ARM: ${lib}.lib/.dso" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
             else
               echo "  найден: $FOUND_LIB" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
             fi
