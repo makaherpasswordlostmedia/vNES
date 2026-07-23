@@ -601,8 +601,16 @@ jobs:
             cat "$VARIANT_CFG" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
           fi
           echo "Абсолютный путь к bld.inf: $(pwd)/bld.inf"
-          echo "--- raptor_make.py: контекст вокруг строки 540 (count = len(fileName_list)) — где формируется список makefile-имён ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
-          sed -n '450,545p' "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/raptor_make.py" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- Поиск класса MakefileSet и метода makefileNames ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          grep -rn "class MakefileSet\|def makefileNames\|def addCall\|def createChild" "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/"*.py 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- Файл, где определён MakefileSet: показываю makefileNames() и addCall() целиком ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          MS_FILE=$(grep -rl "class MakefileSet" "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/"*.py 2>/dev/null | head -n1)
+          echo "Файл: $MS_FILE" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          if [ -n "$MS_FILE" ]; then
+            grep -n "def makefileNames\|def addCall\|def __init__\|def createChild" -A15 "$MS_FILE" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          fi
+          echo "--- WriteConfiguredSpec: где решается, для каких interfaces создаётся makefile (target vs export vs bitmap) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          grep -n "def WriteConfiguredSpec" -A60 "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/raptor_make.py" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
           echo "--- Проверка наличия LIBRARY-зависимостей из vnes.mmp в EPOCROOT ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
           for lib in euser apparc cone eikcore avkon fbscli ws32 gdi bafl efsrv estor; do
             FOUND_LIB=$(find "$GITHUB_WORKSPACE/epocroot/epoc32" -iname "${lib}.lib" -o -iname "${lib}.dso" 2>/dev/null | head -n1)
