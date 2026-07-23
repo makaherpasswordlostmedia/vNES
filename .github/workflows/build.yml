@@ -601,6 +601,17 @@ jobs:
             cat "$VARIANT_CFG" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
           fi
           echo "Абсолютный путь к bld.inf: $(pwd)/bld.inf"
+          echo "--- Поиск в исходниках Raptor того, что определяет список Makefile_all.* (export/bitmap/resource/target/...) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          grep -rn "makefile_all\.target\|'target'.*makefile\|makefile.*'target'" "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/" 2>&1 | head -30 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- Проверка наличия LIBRARY-зависимостей из vnes.mmp в EPOCROOT ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          for lib in euser apparc cone eikcore avkon fbscli ws32 gdi bafl efsrv estor; do
+            FOUND_LIB=$(find "$GITHUB_WORKSPACE/epocroot/epoc32" -iname "${lib}.lib" -o -iname "${lib}.dso" 2>/dev/null | head -n1)
+            if [ -z "$FOUND_LIB" ]; then
+              echo "  ОТСУТСТВУЕТ: ${lib}.lib/.dso" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+            else
+              echo "  найден: $FOUND_LIB" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+            fi
+          done
           "${{ steps.tools.outputs.sbs }}" -b "$(pwd)/bld.inf" -c arm.v5.urel.gcce12_1_0 TARGET 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" \
             || { echo "::error::Компиляция vNES завершилась с ошибкой. См. build_vnes.log."; exit 1; }
           # -d по неясной причине не даёт debug-вывода в этой версии/сборке
