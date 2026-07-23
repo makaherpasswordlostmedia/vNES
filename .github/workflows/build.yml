@@ -601,12 +601,8 @@ jobs:
             cat "$VARIANT_CFG" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
           fi
           echo "Абсолютный путь к bld.inf: $(pwd)/bld.inf"
-          echo "--- raptor.py: поиск ВЫЗОВА InfoDiscovery('makefile', ...) — где формируется count ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
-          grep -n "InfoDiscovery" "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/"*.py 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
-          echo "--- raptor.py: контекст вокруг каждого вызова InfoDiscovery с object_type='makefile' ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
-          grep -n "InfoDiscovery" -A2 -B30 "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/raptor.py" 2>&1 | grep -A32 "object_type *= *.makefile." | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
-          echo "--- Файлы, содержащие определение makefile-типов (export/bitmap/target как список типов) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
-          grep -rln "'export'.*'bitmap'\|makefileTypes\|MAKEFILE_TYPES\|self\.export.*self\.target\|targetTypeMakefileMap" "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/"*.py 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- raptor_make.py: контекст вокруг строки 540 (count = len(fileName_list)) — где формируется список makefile-имён ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          sed -n '450,545p' "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/raptor_make.py" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
           echo "--- Проверка наличия LIBRARY-зависимостей из vnes.mmp в EPOCROOT ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
           for lib in euser apparc cone eikcore avkon fbscli ws32 gdi bafl efsrv estor; do
             FOUND_LIB=$(find "$GITHUB_WORKSPACE/epocroot/epoc32" -iname "${lib}.lib" -o -iname "${lib}.dso" 2>/dev/null | head -n1)
