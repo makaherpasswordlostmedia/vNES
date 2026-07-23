@@ -555,7 +555,13 @@ jobs:
             exit 1
           fi
           echo "Симлинк подтверждён, содержимое /epoc32/include:"
+          # С pipefail "ls | head -5" даёт SIGPIPE -> Broken pipe -> exit 2,
+          # как только head закрывает дескриптор после 5 строк — и шаг падает
+          # на чисто диагностическом выводе. Отключаем pipefail только на
+          # время этой команды.
+          set +o pipefail
           ls -la /epoc32/include | head -5
+          set -o pipefail
 
       - name: Clear stale Raptor toolcheck/makefile caches
         run: |
