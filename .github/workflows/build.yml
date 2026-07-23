@@ -528,6 +528,7 @@ jobs:
       - name: Symlink /epoc32 -> real EPOCROOT/epoc32
         run: |
           set -e
+          set -o pipefail
           # vnes.mmp (и, вероятно, другие .mmp/.rss в дереве Raptor) используют
           # SYSTEMINCLUDE /epoc32/include — абсолютный путь от корня файловой
           # системы. Такой синтаксис предполагает классическую Symbian-машину,
@@ -538,9 +539,37 @@ jobs:
           # физически не существовал — судя по всему, именно из-за этого
           # Raptor молча не находил валидный toolset/цель для сборки и
           # отрабатывал "0 секунд, no warnings or errors" без явной ошибки.
-          echo "Создаю симлинк /epoc32 -> $GITHUB_WORKSPACE/epocroot/epoc32 ..."
-          sudo ln -sfn "$GITHUB_WORKSPACE/epocroot/epoc32" /epoc32
+          REAL_EPOC32="$GITHUB_WORKSPACE/epocroot/epoc32"
+          if [ ! -d "$REAL_EPOC32/include" ]; then
+            echo "::error::$REAL_EPOC32/include не существует — PDK не распакован до этого шага, симлинк ставить некуда."
+            exit 1
+          fi
+          echo "Создаю симлинк /epoc32 -> $REAL_EPOC32 ..."
+          sudo ln -sfn "$REAL_EPOC32" /epoc32
+          # Жёстко проверяем, что симлинк реально работает, а не просто
+          # "создан" — раньше ошибка тут тонула в пайпе с head, и set -e
+          # её не ловил, из-за чего Raptor молча собирал 0 файлов.
+          if [ -z "$(ls -A /epoc32/include 2>/dev/null)" ]; then
+            echo "::error::/epoc32/include пуст после создания симлинка — проверка провалена."
+            ls -la /epoc32 || true
+            exit 1
+          fi
+          echo "Симлинк подтверждён, содержимое /epoc32/include:"
           ls -la /epoc32/include | head -5
+
+      - name: Clear stale Raptor toolcheck/makefile caches
+        run: |
+          set -e
+          # Если PDK/симлинк /epoc32 появились ПОСЛЕ того, как Raptor уже
+          # закэшировал результат парсинга toolset (toolcheck_cache_.tmp)
+          # или сгенерированные Makefile_all.* из предыдущего неудачного
+          # прогона (одна и та же рабочая директория раннера), Raptor может
+          # посчитать конфигурацию "up-to-date" и повторно выдать пустые
+          # Makefile ("Nothing to be done for 'TARGET'") — тот самый
+          # мгновенный "0 seconds, no warnings or errors" без единого
+          # скомпилированного файла. Чистим кэш явно перед реальной сборкой.
+          EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
+          find "${EPOCROOT}epoc32/build" -maxdepth 1 \( -name 'toolcheck_cache_*' -o -name 'Makefile_all*' -o -name 'Makefile.*.log' \) -print -delete 2>/dev/null || true
 
       - name: Build vNES with sbs
         working-directory: vnes-src/src/group
