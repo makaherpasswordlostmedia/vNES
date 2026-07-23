@@ -609,13 +609,18 @@ jobs:
           # arm.v5.urel.gcce4_4_1 (см. akaWolf-Wiki Fshell/Getting Started).
           # Версия компилятора у нас — 12.1.0 (та же, что задаёт
           # SBS_GCCE1210BIN), поэтому используем arm.v5.urel.gcce12_1_0.
-          # Найдена реальная причина "0 секунд, no warnings or errors":
-          # без явной цели sbs выполнял только стандартный набор
-          # (EXPORT/BITMAP/RESOURCE_DEPS/RESOURCE/default-ALL) — ни один
-          # из них не компилирует .cpp в .o и не линкует .exe. Цель,
-          # которая это делает — TARGET (см. usage sbs: "TARGET Create
-          # main executables") — не включена в дефолтный набор и должна
-          # быть указана явно.
+          # ИСПРАВЛЕНО: изначально сюда был добавлен позиционный аргумент
+          # "TARGET" в предположении, что это специальное what-имя sbs,
+          # включающее компиляцию/линковку ("TARGET Create main
+          # executables"). На деле sbs принимает what-имена только в
+          # нижнем регистре (target, а не TARGET), а переданный "как есть"
+          # аргумент Raptor интерпретировал не как what-имя, а как имя
+          # MAKE-цели и пытался вызвать её во всех сгенерированных
+          # Makefile_all.* — отсюда "make: Nothing to be done for
+          # 'TARGET'" и отсутствие .compile/.target части в makefile.
+          # Без лишних аргументов sbs по умолчанию и так строит полный
+          # набор фаз (export/bitmap/resource/library/target/final), так
+          # что явный "what" здесь не нужен вовсе.
           echo "--- Проверка epoc32/tools/variant/variant.cfg (ENABLE_ABIV2_MODE) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
           # akaWolf-Wiki Raptor Quick Start troubleshooting checklist:
           # "Check that the EPOCROOT directory contains the file
@@ -654,7 +659,17 @@ jobs:
               echo "  найден: $FOUND_LIB" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
             fi
           done
-          "${{ steps.tools.outputs.sbs }}" -b "$(pwd)/bld.inf" -c arm.v5.urel.gcce12_1_0 TARGET 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" \
+          # ВАЖНО: "TARGET" здесь — НЕ ключевое слово sbs, включающее
+          # компиляцию/линковку. sbs понимает только lowercase what-имена
+          # (export, library, target, final, clean, ...), а переданный
+          # позиционный аргумент без "--" Raptor трактует как ИМЯ MAKE-ЦЕЛИ,
+          # которую нужно передать во все сгенерированные Makefile_all.* —
+          # такой цели там нет, отсюда "make: Nothing to be done for
+          # 'TARGET'" и makefile без .target/.compile части. По умолчанию
+          # (без каких-либо what-аргументов) sbs и так строит полный набор
+          # фаз: export, bitmap, resource, library, target (компиляция +
+          # линковка) и final — поэтому просто не передаём лишний аргумент.
+          "${{ steps.tools.outputs.sbs }}" -b "$(pwd)/bld.inf" -c arm.v5.urel.gcce12_1_0 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" \
             || { echo "::error::Компиляция vNES завершилась с ошибкой. См. build_vnes.log."; exit 1; }
           # -d по неясной причине не даёт debug-вывода в этой версии/сборке
           # Raptor (несмотря на то что usage sbs его документирует). Вместо
