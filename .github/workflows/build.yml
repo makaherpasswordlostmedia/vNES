@@ -669,6 +669,24 @@ jobs:
           # (без каких-либо what-аргументов) sbs и так строит полный набор
           # фаз: export, bitmap, resource, library, target (компиляция +
           # линковка) и final — поэтому просто не передаём лишний аргумент.
+          # ДИАГНОСТИКА (добавлено после того как отсутствие TARGET не
+          # решило проблему — 5 generic makefile'ов генерируются, но ни
+          # один компонент/mmp не был реально обнаружен и обработан):
+          # проверяем, что сам sbs видит про доступные конфигурации и
+          # интерфейсы, прежде чем гадать дальше вслепую.
+          echo "--- sbs --version ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          "${{ steps.tools.outputs.sbs }}" --version 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- sbs --help (полный usage) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          "${{ steps.tools.outputs.sbs }}" --help 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- sbs -c arm.v5.urel.gcce12_1_0 --config-list (проверка, что конфигурация вообще известна Raptor'у) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          "${{ steps.tools.outputs.sbs }}" -c arm.v5.urel.gcce12_1_0 --config-list 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- sbs --alias-list (полный список известных алиасов/групп -c) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          "${{ steps.tools.outputs.sbs }}" --alias-list 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- sbs -b bld.inf -c arm.v5.urel.gcce12_1_0 --dry-run (что реально запланировано к сборке, без выполнения) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          "${{ steps.tools.outputs.sbs }}" -b "$(pwd)/bld.inf" -c arm.v5.urel.gcce12_1_0 --dry-run 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- sbs -b bld.inf -c arm.v5.urel.gcce12_1_0 -f - --filelist (список файлов, которые Raptor реально включил бы в сборку) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          "${{ steps.tools.outputs.sbs }}" -b "$(pwd)/bld.inf" -c arm.v5.urel.gcce12_1_0 --filelist="$GITHUB_WORKSPACE/build_vnes_filelist.log" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          cat "$GITHUB_WORKSPACE/build_vnes_filelist.log" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
           "${{ steps.tools.outputs.sbs }}" -b "$(pwd)/bld.inf" -c arm.v5.urel.gcce12_1_0 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" \
             || { echo "::error::Компиляция vNES завершилась с ошибкой. См. build_vnes.log."; exit 1; }
           # -d по неясной причине не даёт debug-вывода в этой версии/сборке
