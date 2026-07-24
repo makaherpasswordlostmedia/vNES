@@ -31,7 +31,7 @@ SOURCE          NesDocument.cpp
 USERINCLUDE     ../inc
 USERINCLUDE     ../native
 
-SYSTEMINCLUDE   /epoc32/include
+SYSTEMINCLUDE   $(EPOCROOT)epoc32/include
 
 LIBRARY         euser.lib
 LIBRARY         apparc.lib
