@@ -200,11 +200,11 @@ jobs:
               echo "  - $z"
               if unzip -tq "$z" >/dev/null 2>&1; then
                 echo "    (настоящий zip) unzip..."
-                unzip -q -o "$z" -d epocroot/ || echo "::warning::unzip не смог распаковать $z, хотя тест прошёл"
+                unzip -q -o "$z" -d epocroot/ || { echo "::error::unzip не смог распаковать $z, хотя тест архива прошёл — PDK будет неполным."; exit 1; }
               else
                 echo "    (не настоящий zip, пробую как 7z по содержимому)"
                 7z x "$z" -oepocroot/ -y > /tmp/7z_$(basename "$z").log 2>&1 \
-                  || echo "::warning::7z тоже не смог распаковать $z, см. /tmp/7z_$(basename "$z").log"
+                  || { echo "::error::7z тоже не смог распаковать $z (см. /tmp/7z_$(basename "$z").log) — PDK будет неполным."; cat "/tmp/7z_$(basename "$z").log"; exit 1; }
               fi
             done
           else
@@ -216,6 +216,31 @@ jobs:
           find epocroot -maxdepth 2 -iname "epoc32" || true
           echo "Полное дерево верхнего уровня epocroot/ (для диагностики):"
           find epocroot -maxdepth 3 -type d
+
+          echo "--- Проверка полноты PDK: критичные файлы, без которых сборка ---"
+          echo "--- ресурсов (.rss) и части заголовков молча упадёт гораздо позже ---"
+          # rcomp — компилятор ресурсов Symbian; e32svr.h — базовый системный
+          # заголовок, от которого зависит f32file.h и почти всё остальное.
+          # Раньше их отсутствие всплывало только в самом конце сборки как
+          # "avkon.rh: No such file" / "e32svr.h: No such file" — то есть на
+          # компонент вообще не намекало, что дело в PDK, а не в исходниках.
+          MISSING=0
+          for f in \
+            "epocroot/epoc32/tools/rcomp" \
+            "epocroot/epoc32/include/e32svr.h" \
+            "epocroot/epoc32/include/avkon.rh"
+          do
+            if [ ! -e "$f" ]; then
+              echo "::error::Отсутствует в PDK: $f"
+              MISSING=1
+            else
+              echo "OK: $f"
+            fi
+          done
+          if [ "$MISSING" -eq 1 ]; then
+            echo "::error::PDK распакован не полностью (см. файлы выше). Обычно значит, что один из вложенных архивов PDK не распаковался (unzip/7z могли тихо провалиться и не остановить сборку) или скачанный PDK_URL не соответствует ожидаемой версии/дистрибутиву Symbian^3 PDK 3.0.4a."
+            exit 1
+          fi
 
       - name: Fix missing patch-files/linux/build/... (mirror from linux_build)
         working-directory: epocroot/build/cross-plat-dev-utils
