@@ -333,6 +333,144 @@ jobs:
             exit 1
           fi
 
+          # ==================================================================
+          # АВТОМАТИЧЕСКИЙ поиск недостающих файлов — без ручного списка имён.
+          #
+          # Ниже два НЕЗАВИСИМЫХ чека разной природы. Они не гадают, что
+          # "должно" быть в PDK — один сверяется с содержимым самого же
+          # архива, другой — с внешними источниками. Оба подписаны честно,
+          # чтобы не путать "здесь баг распаковки" с "здесь просто нет
+          # такого файла у соседей".
+          #
+          # Общая защита от очень больших источников (см. предыдущие
+          # итерации этого workflow): нигде не печатаем листинг всего
+          # дерева без фильтра, везде taймауты на сеть, везде счётчики
+          # вместо полного вывода при большом числе совпадений.
+          set +e
+
+          echo "=================================================================="
+          echo "ЧЕК 1/2: список файлов ВНУТРИ pdk.zip vs что реально попало в epocroot/"
+          echo "(ловит баги распаковки — файл заявлен в архиве, но не долетел на диск)"
+          echo "=================================================================="
+          # Список имён (basename) из вложенных архивов — без распаковки,
+          # только заголовки zip/7z. Это дёшево даже для архивов на
+          # гигабайты и на миллионы записей (unzip -l / 7z l не читают
+          # содержимое файлов, только centralized directory).
+          ARCHIVE_NAMES_FILE=/tmp/pdk_archive_names.txt
+          > "$ARCHIVE_NAMES_FILE"
+          for z in $(find pdk_extracted -iname "*.zip" -o -iname "*.7z"); do
+            if unzip -l "$z" >/tmp/_listing.txt 2>/dev/null; then
+              awk 'NR>3' /tmp/_listing.txt | head -n -2 | awk '{print $NF}' >> "$ARCHIVE_NAMES_FILE"
+            elif 7z l "$z" >/tmp/_listing.txt 2>/dev/null; then
+              # Формат 7z l: заголовок, строка "-------" (начало данных),
+              # строки данных, строка "-------" (конец данных), итог.
+              # Колонка Name начинается там же, где последняя группа "---"
+              # в разделительной строке — берём по позиции, а не по номеру
+              # поля, т.к. колонка Attr (напр. "....A") сама содержит
+              # непробельные символы и сбивает нумерацию awk-полей.
+              awk '
+                /^-------------------/ && !start {
+                  match($0, /-+$/); start = RSTART; c++; next
+                }
+                /^-------------------/ { c++; next }
+                c==1 && NF>0 { print substr($0, start) }
+              ' /tmp/_listing.txt | sed 's/^ *//' >> "$ARCHIVE_NAMES_FILE"
+            fi
+          done
+          ARCHIVE_TOTAL=$(wc -l < "$ARCHIVE_NAMES_FILE")
+          echo "Всего имён файлов, заявленных внутри вложенных архивов PDK: $ARCHIVE_TOTAL"
+
+          if [ "$ARCHIVE_TOTAL" -gt 0 ]; then
+            # basename каждого заявленного файла vs basename того, что
+            # реально есть на диске в epocroot — считаем только те
+            # заявленные имена, которых нет НИГДЕ в epocroot ни по какому
+            # пути (это самый дешёвый безопасный тест: полное совпадение
+            # имени файла, без сравнения путей и содержимого).
+            DISK_NAMES_FILE=/tmp/epocroot_names.txt
+            find epocroot -type f -printf '%f\n' 2>/dev/null | sort -u > "$DISK_NAMES_FILE"
+            DISK_TOTAL=$(wc -l < "$DISK_NAMES_FILE")
+            echo "Всего уникальных имён файлов на диске в epocroot/: $DISK_TOTAL"
+
+            sort -u "$ARCHIVE_NAMES_FILE" -o "$ARCHIVE_NAMES_FILE.sorted"
+            MISSING_FROM_DISK=$(comm -23 "$ARCHIVE_NAMES_FILE.sorted" "$DISK_NAMES_FILE")
+            MISSING_FROM_DISK_COUNT=$(echo -n "$MISSING_FROM_DISK" | grep -c . || true)
+            echo "Заявлены в архиве, но НЕ найдены на диске (по имени файла): $MISSING_FROM_DISK_COUNT"
+            if [ "$MISSING_FROM_DISK_COUNT" -gt 0 ]; then
+              echo "Первые 30 (полный список большим не печатаем, чтобы не раздувать лог):"
+              echo "$MISSING_FROM_DISK" | head -30 | sed 's/^/  - /'
+            fi
+          else
+            echo "::warning::Не удалось прочитать листинг ни одного вложенного архива (unzip -l и 7z l оба не сработали) — чек 1 пропущен."
+          fi
+
+          echo "=================================================================="
+          echo "ЧЕК 2/2: имена файлов из внешних источников vs что есть в epocroot/"
+          echo "(это НЕ 'эталон, что обязано быть' — просто у соседей похожее нашлось)"
+          echo "=================================================================="
+          mkdir -p /tmp/ext_sources && cd /tmp/ext_sources
+
+          EXT_NAMES_FILE=/tmp/ext_source_names.txt
+          > "$EXT_NAMES_FILE"
+
+          echo "--- Клонирую loociano/symbian-build-tools ---"
+          timeout 120 git clone --depth 1 https://github.com/loociano/symbian-build-tools.git sbt > /tmp/clone_sbt.log 2>&1
+          if [ -d sbt ]; then
+            find sbt -type f -printf '%f\n' 2>/dev/null >> "$EXT_NAMES_FILE"
+            echo "  файлов добавлено в сравнение: $(find sbt -type f | wc -l)"
+          else
+            echo "  ::warning::клонирование не удалось/таймаут, см. /tmp/clone_sbt.log"
+          fi
+
+          echo "--- Клонирую SymbianRevive/symbian-headers ---"
+          timeout 180 git clone --depth 1 --filter=blob:none --sparse https://github.com/SymbianRevive/symbian-headers.git sh > /tmp/clone_sh.log 2>&1
+          if [ -d sh ]; then
+            find sh -type f -printf '%f\n' 2>/dev/null >> "$EXT_NAMES_FILE"
+            echo "  файлов добавлено в сравнение: $(find sh -type f | wc -l)"
+          else
+            echo "  ::warning::клонирование не удалось/таймаут, см. /tmp/clone_sh.log"
+          fi
+
+          echo "--- archive.org: другие SDK/tools-архивы (metadata API, без скачивания содержимого) ---"
+          for item in nokia_sdks_n_dev_tools nokia_sdks_n_dev_tools2 nokia_sdks_n_dev_tools3; do
+            timeout 60 curl -s --max-filesize 209715200 "https://archive.org/metadata/$item" -o "/tmp/${item}.json"
+            if [ -s "/tmp/${item}.json" ]; then
+              # Имена файлов из JSON-листинга archive.org — без скачивания
+              # самих файлов, только метаданные. grep по сырому JSON, не
+              # json.load(), чтобы не тянуть в память при большом листинге.
+              grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "/tmp/${item}.json" 2>/dev/null \
+                | sed -E 's/.*"([^"]*)"$/\1/; s#.*/##' >> "$EXT_NAMES_FILE"
+              echo "  $item: обработан"
+            else
+              echo "  $item: metadata недоступна"
+            fi
+          done
+
+          cd - >/dev/null
+          sort -u "$EXT_NAMES_FILE" -o "$EXT_NAMES_FILE"
+          EXT_TOTAL=$(wc -l < "$EXT_NAMES_FILE")
+          echo "Всего уникальных имён файлов из внешних источников: $EXT_TOTAL"
+
+          if [ "$EXT_TOTAL" -gt 0 ]; then
+            find epocroot -type f -printf '%f\n' 2>/dev/null | sort -u > /tmp/epocroot_names2.txt
+            MISSING_FROM_EXT=$(comm -23 "$EXT_NAMES_FILE" /tmp/epocroot_names2.txt)
+            MISSING_FROM_EXT_COUNT=$(echo -n "$MISSING_FROM_EXT" | grep -c . || true)
+            echo "Есть у внешних источников, но нет в epocroot (по имени файла): $MISSING_FROM_EXT_COUNT"
+            echo "Это включает много ожидаемого шума (README, лицензии, .git-служебное,"
+            echo "файлы, которые в принципе не относятся к Symbian) — не считайте всё"
+            echo "это реальными пробелами, это просто сырая разница множеств имён."
+            if [ "$MISSING_FROM_EXT_COUNT" -gt 0 ]; then
+              echo "Первые 50 (полный список большим не печатаем):"
+              echo "$MISSING_FROM_EXT" | head -50 | sed 's/^/  - /'
+            fi
+          else
+            echo "::warning::Не удалось собрать ни одного внешнего источника — чек 2 пропущен."
+          fi
+
+          echo "=================================================================="
+          echo "Конец автоматических чеков недостающих файлов."
+          echo "=================================================================="
+          set -e
+
       - name: Fix missing patch-files/linux/build/... (mirror from linux_build)
         working-directory: epocroot/build/cross-plat-dev-utils
         run: |
