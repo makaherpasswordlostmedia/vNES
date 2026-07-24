@@ -674,14 +674,10 @@ jobs:
           # один компонент/mmp не был реально обнаружен и обработан):
           # проверяем, что сам sbs видит про доступные конфигурации и
           # интерфейсы, прежде чем гадать дальше вслепую.
-          echo "--- Поиск вызовов Write(...) — кто формирует список specs, передаваемый в Write ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
-          grep -rn "\.Write(" "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/"*.py 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
-          echo "--- Поиск класса/метода, формирующего spec с interface='target' из mmp (BuildUnit/Recipe/Specification) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
-          grep -rln "class BuildUnit\|def GetSpecsForBuild\|def GetSpecs\b\|def Specs\b" "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/"*.py 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
-          echo "--- Поиск того, что раскрывает bld.inf в конкретные mmp-компоненты (interpret bld.inf, PRJ_MMPFILES handling) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
-          grep -rln "PRJ_MMPFILES\|prj_mmpfiles" "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/"*.py 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
-          echo "--- Поиск фильтрации по PRJ_PLATFORMS (где решается, что платформа GCCE не подходит под конфигурацию arm.v5.urel.gcce12_1_0) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
-          grep -rln "PRJ_PLATFORMS\|prj_platforms\|def SupportedPlatform\|IsPlatformSupported" "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/"*.py 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- raptor_meta.py: контекст обработки PRJ_PLATFORMS (где решается, подходит ли платформа GCCE) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          grep -n -i "platform" "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/raptor_meta.py" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- raptor_meta.py: контекст обработки PRJ_MMPFILES (где извлекаются mmp-имена из bld.inf) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          grep -n -i "mmpfiles\|prj_mmp" "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/raptor_meta.py" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
           echo "--- Прямой запуск препроцессора над bld.inf (то же, что видит Raptor после макроподстановки) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
           # ВАЖНО: не определяем макрос -DGCCE здесь — если это сделать,
           # препроцессор заменит буквальное слово "GCCE" в тексте bld.inf
