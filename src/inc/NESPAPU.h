@@ -1,7 +1,14 @@
 /*
  * NESPAPU.h — Аналог PAPU.java
  * Эмулятор аудиопроцессора (pseudo-APU) Ricoh 2A03.
- * На Qt/Symbian^3 используется QAudioOutput для вывода звука.
+ *
+ * ЗВУК ВРЕМЕННО ОТКЛЮЧЁН: раньше вывод шёл через QAudioOutput (Qt
+ * Multimedia), но сборка нативная (Raptor/GCCE, без Qt в bld.inf/.mmp).
+ * Вся логика APU (каналы, микширование, тактирование) оставлена как есть —
+ * сэмплы по-прежнему считаются и складываются в iAudioBuf, просто нигде не
+ * воспроизводятся. Когда появится нативный Symbian аудио-вывод (например,
+ * CMdaAudioOutputStream), FlushBuffer() — единственное место, которое нужно
+ * будет доработать.
  *
  * Каналы: 2 × Square, 1 × Triangle, 1 × Noise, 1 × DMC
  */
@@ -10,11 +17,10 @@
 #define NESPAPU_H
 
 #include "NESTypes.h"
-#include <QAudioOutput>
-#include <QIODevice>
-#include <QObject>
 
 class CNESCPU;
+class RWriteStream;
+class RReadStream;
 
 // Размер аудио-буфера (в сэмплах)
 const TInt KAudioBufSamples = 2048;
@@ -154,7 +160,7 @@ private:
 // ---------------------------------------------------------------------------
 // Главный класс APU
 // ---------------------------------------------------------------------------
-class CNESPAPU : public QObject, public CBase
+class CNESPAPU : public CBase
 {
 public:
     static CNESPAPU* NewLC(CNESCPU* aCpu);
@@ -174,9 +180,6 @@ public:
     // Установить частоту дискретизации
     void SetSampleRate(TInt aRate);
     TInt SampleRate() const { return iSampleRate; }
-
-    // Qt audio
-    void initAudio();
 
     void StateSave(RWriteStream& aStream) const;
     void StateLoad(RReadStream&  aStream);
@@ -206,9 +209,6 @@ private:
     s16    iAudioBuf[2][KAudioBufSamples];
     TInt   iBufWrite;
     TInt   iBufPos;
-
-    QAudioOutput* iAudioOutput;
-    QIODevice*    iAudioDevice;
 };
 
 #endif // NESPAPU_H

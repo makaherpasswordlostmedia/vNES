@@ -14,6 +14,8 @@
 class CNESMapper;
 class CNESPPU;
 class CNESPAPU;
+class RWriteStream;
+class RReadStream;
 class CNESMemory;
 
 // Таблица опкодов: 256 записей по 32 бита

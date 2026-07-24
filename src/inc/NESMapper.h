@@ -11,6 +11,8 @@
 class CNESROM;
 class CNESMemory;
 class CNESPPU;
+class RWriteStream;
+class RReadStream;
 class CNESCPU;
 
 class CNESMapper : public CBase

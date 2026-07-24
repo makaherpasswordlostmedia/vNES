@@ -12,6 +12,8 @@
 class CNESMapper;
 class CNESMemory;
 class CNESCPU;
+class RWriteStream;
+class RReadStream;
 
 // Число тайлов в паттерн-таблицах (2 таблицы × 256 тайлов)
 const TInt KNumTiles = 512;

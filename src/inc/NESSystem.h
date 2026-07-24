@@ -11,6 +11,8 @@
 class CNESCPU;
 class CNESPPU;
 class CNESPAPU;
+class RWriteStream;
+class RReadStream;
 class CNESMemory;
 class CNESMapper;
 class CNESROM;

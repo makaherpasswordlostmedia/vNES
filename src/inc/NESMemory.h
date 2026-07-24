@@ -8,6 +8,9 @@
 
 #include "NESTypes.h"
 
+class RWriteStream;
+class RReadStream;
+
 class CNESMemory : public CBase
 {
 public:
