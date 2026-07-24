@@ -275,46 +275,61 @@ jobs:
           echo "Полное дерево верхнего уровня epocroot/ (для диагностики):"
           find epocroot -maxdepth 3 -type d
 
-          echo "--- Проверка полноты PDK: критичные заголовки, без которых сборка ---"
-          echo "--- ресурсов (.rss) и части кода молча упадёт гораздо позже ---"
-          # e32svr.h — базовый системный заголовок, от которого зависит
-          # f32file.h и почти всё остальное. Раньше его отсутствие всплывало
-          # только в самом конце сборки как "e32svr.h: No such file" — то
-          # есть ни на чём не намекало, что дело в PDK, а не в исходниках.
+          echo "--- Сохраняю логи распаковки вложенных PDK-архивов для диагностики в артефактах ---"
+          mkdir -p "$GITHUB_WORKSPACE/pdk_extract_logs"
+          cp /tmp/pdk_unzip_top.log "$GITHUB_WORKSPACE/pdk_extract_logs/" 2>/dev/null || true
+          cp /tmp/unzip_*.log "$GITHUB_WORKSPACE/pdk_extract_logs/" 2>/dev/null || true
+          cp /tmp/7z_*.log "$GITHUB_WORKSPACE/pdk_extract_logs/" 2>/dev/null || true
+          echo "Скопировано файлов логов: $(ls "$GITHUB_WORKSPACE/pdk_extract_logs" 2>/dev/null | wc -l)"
+
+          echo "--- Диагностика: сколько заголовков реально попало в epoc32/include ---"
+          H_INCLUDE=$(find epocroot/epoc32/include -iname '*.h' 2>/dev/null | wc -l)
+          H_TOTAL=$(find epocroot -iname '*.h' 2>/dev/null | wc -l)
+          echo "Файлов *.h в epoc32/include (рекурсивно): $H_INCLUDE"
+          echo "Файлов *.h во всём epocroot (рекурсивно, любая глубина/каталог): $H_TOTAL"
+
+          echo "--- Проверка полноты PDK: критичные файлы для справки ---"
+          # ВАЖНО: этот блок больше НЕ останавливает сборку по каждому
+          # отдельному отсутствующему заголовку. С одним exit 1 на файл мы
+          # рисковали упираться в "миллион файлов не найдено" — падать на
+          # первом же из длинного хвоста похожих заголовков, чинить его,
+          # тут же падать на следующем, и так по кругу десятками прогонов.
+          # Вместо этого проверяем весь список СРАЗУ, за один проход,
+          # печатаем полную картину (что есть/чего нет), и решение о
+          # фатальности принимаем один раз в конце — по ОБЩЕЙ ситуации
+          # (см. блок ниже), а не по отдельному файлу.
           #
-          # ВАЖНО: epoc32/tools/rcomp сюда сознательно НЕ включён как
-          # фатальная проверка. PDK с archive.org поставляет rcomp только
-          # как исходники (epocroot/build/bintools/rcomp) — готовый бинарник
-          # появляется лишь после шага "Build Raptor (sbsv2)" дальше по
-          # пайплайну. Требовать его здесь — гарантированный ложный
-          # "PDK неполон", даже когда распаковка прошла идеально.
-          # avkon.rh (заголовки S60 UI) в этом OSS/BOM-релизе PDK тоже не
-          # всегда лежит прямо в epoc32/include — его отсутствие здесь тоже
-          # понижено до предупреждения, чтобы не ронять сборку компонентов,
-          # которым он не нужен.
-          MISSING=0
-          for f in \
-            "epocroot/epoc32/include/e32svr.h"
-          do
-            if [ ! -e "$f" ]; then
-              echo "::error::Отсутствует в PDK: $f"
-              MISSING=1
+          # Список ориентировочный — это файлы, о которых мы уже знаем,
+          # что они нужны позже по пайплайну. Список наверняка неполный;
+          # реальная полнота PDK всё равно проверяется по факту при сборке
+          # самих компонентов (sbs), это лишь ранняя подсказка.
+          CHECK_LIST="epocroot/epoc32/include/e32svr.h epocroot/epoc32/include/e32std.h epocroot/epoc32/include/e32base.h epocroot/epoc32/include/f32file.h epocroot/epoc32/tools/rcomp epocroot/epoc32/include/avkon.rh"
+          FOUND_COUNT=0
+          MISSING_COUNT=0
+          MISSING_LIST=""
+          for f in $CHECK_LIST; do
+            if [ -e "$f" ]; then
+              FOUND_COUNT=$((FOUND_COUNT + 1))
             else
-              echo "OK: $f"
+              MISSING_COUNT=$((MISSING_COUNT + 1))
+              MISSING_LIST="$MISSING_LIST $f"
             fi
           done
-          for f in \
-            "epocroot/epoc32/tools/rcomp" \
-            "epocroot/epoc32/include/avkon.rh"
-          do
-            if [ ! -e "$f" ]; then
-              echo "::warning::Пока отсутствует (появится позже в пайплайне или не требуется для этого компонента): $f"
-            else
-              echo "OK: $f"
-            fi
-          done
-          if [ "$MISSING" -eq 1 ]; then
-            echo "::error::PDK распакован не полностью (см. файлы выше). Обычно значит, что один из вложенных архивов PDK не распаковался (unzip/7z могли тихо провалиться и не остановить сборку) или скачанный PDK_URL не соответствует ожидаемой версии/дистрибутиву Symbian^3 PDK 3.0.4a."
+          echo "Найдено: $FOUND_COUNT / $((FOUND_COUNT + MISSING_COUNT)) файлов из ориентировочного списка."
+          if [ "$MISSING_COUNT" -gt 0 ]; then
+            echo "::warning::Не найдены по ожидаемым путям (это не обязательно фатально — часть появляется позже в пайплайне, часть может лежать в другой директории):"
+            for f in $MISSING_LIST; do
+              echo "  - $f"
+            done
+          fi
+
+          # Единственный по-настоящему фатальный случай — когда PDK
+          # распаковался почти пустым (т.е. что-то сломалось на уровне
+          # архивов целиком, а не "не хватает одного конкретного файла").
+          # Порог 1000 — с большим запасом ниже реальных десятков тысяч
+          # заголовков в нормально распакованном PDK 3.0.4a.
+          if [ "$H_INCLUDE" -lt 1000 ]; then
+            echo "::error::В epoc32/include всего $H_INCLUDE файлов *.h — это на порядки меньше ожидаемого для Symbian^3 PDK. Похоже, распаковка headers/libs архива (binaries_epoc_sdk.7z.zip или аналогичного) прошла не так, как надо, даже если unzip/7z вернули код 0."
             exit 1
           fi
 
@@ -875,6 +890,7 @@ jobs:
             build_elf2e32.log
             build_e32tools.log
             build_vnes.log
+            pdk_extract_logs/
           if-no-files-found: ignore
 
       - name: Upload .sis artifact
