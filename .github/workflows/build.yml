@@ -674,16 +674,20 @@ jobs:
           # один компонент/mmp не был реально обнаружен и обработан):
           # проверяем, что сам sbs видит про доступные конфигурации и
           # интерфейсы, прежде чем гадать дальше вслепую.
-          echo "--- sbs --version ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
-          "${{ steps.tools.outputs.sbs }}" --version 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
-          echo "--- sbs --help (полный usage) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
-          "${{ steps.tools.outputs.sbs }}" --help 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
-          echo "--- sbs -c arm.v5.urel.gcce12_1_0 --config-list (проверка, что конфигурация вообще известна Raptor'у) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
-          "${{ steps.tools.outputs.sbs }}" -c arm.v5.urel.gcce12_1_0 --config-list 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
-          echo "--- sbs --alias-list (полный список известных алиасов/групп -c) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
-          "${{ steps.tools.outputs.sbs }}" --alias-list 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- Поиск вызовов Write(...) — кто формирует список specs, передаваемый в Write ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          grep -rn "\.Write(" "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/"*.py 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- Поиск класса/метода, формирующего spec с interface='target' из mmp (BuildUnit/Recipe/Specification) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          grep -rln "class BuildUnit\|def GetSpecsForBuild\|def GetSpecs\b\|def Specs\b" "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/"*.py 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- Поиск того, что раскрывает bld.inf в конкретные mmp-компоненты (interpret bld.inf, PRJ_MMPFILES handling) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          grep -rln "PRJ_MMPFILES\|prj_mmpfiles" "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/"*.py 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- Поиск фильтрации по PRJ_PLATFORMS (где решается, что платформа GCCE не подходит под конфигурацию arm.v5.urel.gcce12_1_0) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          grep -rln "PRJ_PLATFORMS\|prj_platforms\|def SupportedPlatform\|IsPlatformSupported" "$GITHUB_WORKSPACE/epocroot/build/sbsv2/raptor/python/"*.py 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
           echo "--- Прямой запуск препроцессора над bld.inf (то же, что видит Raptor после макроподстановки) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
-          gcc -E -x c -undef -DGCCE -I"$GITHUB_WORKSPACE/epocroot/epoc32/include" -I"$GITHUB_WORKSPACE/epocroot/epoc32/include/variant" "$(pwd)/bld.inf" 2>&1 | grep -v "^#" | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          # ВАЖНО: не определяем макрос -DGCCE здесь — если это сделать,
+          # препроцессор заменит буквальное слово "GCCE" в тексте bld.inf
+          # (в PRJ_PLATFORMS GCCE) на "1", создавая ложное впечатление
+          # проблемы, которую сам этот диагностический вызов и вызвал.
+          gcc -E -x c -undef -I"$GITHUB_WORKSPACE/epocroot/epoc32/include" -I"$GITHUB_WORKSPACE/epocroot/epoc32/include/variant" "$(pwd)/bld.inf" 2>&1 | grep -v "^#" | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
           "${{ steps.tools.outputs.sbs }}" -b "$(pwd)/bld.inf" -c arm.v5.urel.gcce12_1_0 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" \
             || { echo "::error::Компиляция vNES завершилась с ошибкой. См. build_vnes.log."; exit 1; }
           # -d по неясной причине не даёт debug-вывода в этой версии/сборке
