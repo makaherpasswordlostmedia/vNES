@@ -178,6 +178,31 @@ jobs:
           done
           ls -lh pdk.zip
 
+          # ДИАГНОСТИКА: -C - (resume) означает, что если предыдущий прогон
+          # оставил после себя частично скачанный pdk.zip (например, раннер
+          # был убит по timeout), curl мог "успешно" дозаписать остаток
+          # поверх уже битого файла и выйти с кодом 0, хотя итоговый файл
+          # никогда не был скачан с нуля и может быть внутренне повреждён
+          # (не говоря о случае, когда archive.org на 200 OK отдаёт HTML
+          # страницу-заглушку вместо содержимого). Проверяем это здесь, а
+          # не постфактум на этапе распаковки.
+          echo "--- Реальный тип и размер скачанного pdk.zip ---"
+          file pdk.zip
+          SIZE_BYTES=$(stat -c%s pdk.zip)
+          echo "Размер: $SIZE_BYTES байт"
+          if [ "$SIZE_BYTES" -lt 1000000000 ]; then
+            echo "::warning::pdk.zip заметно меньше ожидаемых ~2.9 ГБ (получено: $SIZE_BYTES байт). Похоже на усечённую/неполную загрузку либо страницу-заглушку вместо архива."
+          fi
+          echo "--- Первые байты файла как текст (если это HTML-заглушка archive.org, будет видно здесь) ---"
+          head -c 2000 pdk.zip | strings | head -20
+          echo "--- Целостность zip (unzip -t по всему архиву, а не только первому уровню) ---"
+          if ! unzip -t pdk.zip > /tmp/pdk_zip_test.log 2>&1; then
+            echo "::error::pdk.zip не проходит проверку целостности unzip -t — файл скачан не полностью или повреждён. Хвост лога проверки:"
+            tail -50 /tmp/pdk_zip_test.log
+            exit 1
+          fi
+          echo "pdk.zip прошёл проверку целостности unzip -t."
+
       - name: Install 7-Zip (needed for PDK archives mislabeled as .zip)
         run: |
           set -e
@@ -187,24 +212,57 @@ jobs:
         run: |
           set -e
           echo "Распаковываю PDK в epocroot/ ..."
-          unzip -q pdk.zip -d pdk_extracted || { echo "::error::Не удалось распаковать PDK zip."; exit 1; }
+          # ВАЖНО: -q глушит и предупреждения, а unzip может вернуть код 1
+          # или 2 (warning) на частично повреждённом архиве и всё равно
+          # что-то распаковать — "||" тут ловил бы только коды >=1, что
+          # вроде бы верно, но без -q мы теряем сам текст предупреждения,
+          # если он всё же проходит. Убираем -q и сохраняем полный лог,
+          # чтобы при частичном успехе (redundant CRC errors и т.п.) это
+          # было видно, а не только "молча меньше файлов, чем нужно".
+          unzip pdk.zip -d pdk_extracted > /tmp/pdk_unzip_top.log 2>&1
+          UNZIP_RC=$?
+          tail -40 /tmp/pdk_unzip_top.log
+          if [ "$UNZIP_RC" -ne 0 ]; then
+            echo "::error::unzip pdk.zip завершился с кодом $UNZIP_RC (0 = успех, 1/2 = предупреждения, >=3 = ошибка). Полный лог выше/в /tmp/pdk_unzip_top.log — PDK, скорее всего, распакован не полностью."
+            exit 1
+          fi
           echo "Верхний уровень PDK-архива:"
           find pdk_extracted -maxdepth 3
+          echo "Количество файлов на верхнем уровне распаковки: $(find pdk_extracted -type f | wc -l)"
 
           mkdir -p epocroot
 
           NESTED=$(find pdk_extracted -iname "*.zip")
           if [ -n "$NESTED" ]; then
-            echo "Найдены вложенные архивы, распаковываю каждый в epocroot/:"
+            echo "Найдены вложенные архивы:"
+            echo "$NESTED"
             for z in $NESTED; do
-              echo "  - $z"
+              echo "  === $z ==="
+              echo "  Размер: $(stat -c%s "$z") байт"
+              BEFORE=$(find epocroot -type f 2>/dev/null | wc -l)
               if unzip -tq "$z" >/dev/null 2>&1; then
-                echo "    (настоящий zip) unzip..."
-                unzip -q -o "$z" -d epocroot/ || { echo "::error::unzip не смог распаковать $z, хотя тест архива прошёл — PDK будет неполным."; exit 1; }
+                echo "    (настоящий zip, целостность OK) распаковываю..."
+                unzip -o "$z" -d epocroot/ > "/tmp/unzip_$(basename "$z").log" 2>&1
+                RC=$?
+                if [ "$RC" -ne 0 ]; then
+                  echo "::error::unzip $z завершился с кодом $RC — PDK будет неполным. Хвост лога:"
+                  tail -40 "/tmp/unzip_$(basename "$z").log"
+                  exit 1
+                fi
               else
-                echo "    (не настоящий zip, пробую как 7z по содержимому)"
-                7z x "$z" -oepocroot/ -y > /tmp/7z_$(basename "$z").log 2>&1 \
-                  || { echo "::error::7z тоже не смог распаковать $z (см. /tmp/7z_$(basename "$z").log) — PDK будет неполным."; cat "/tmp/7z_$(basename "$z").log"; exit 1; }
+                echo "    (unzip -t провалился — не настоящий zip или повреждён), пробую 7z..."
+                7z x "$z" -oepocroot/ -y > /tmp/7z_$(basename "$z").log 2>&1
+                RC=$?
+                if [ "$RC" -ne 0 ]; then
+                  echo "::error::7z тоже не смог распаковать $z (код $RC) — PDK будет неполным. Лог:"
+                  cat "/tmp/7z_$(basename "$z").log"
+                  exit 1
+                fi
+              fi
+              AFTER=$(find epocroot -type f 2>/dev/null | wc -l)
+              echo "  Файлов в epocroot до/после: $BEFORE -> $AFTER (добавлено: $((AFTER - BEFORE)))"
+              if [ "$AFTER" -eq "$BEFORE" ]; then
+                echo "::warning::$z обработан без ошибки, но не добавил ни одного файла в epocroot — подозрительно."
               fi
             done
           else
