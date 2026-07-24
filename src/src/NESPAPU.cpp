@@ -1,11 +1,12 @@
 /*
  * NESPAPU.cpp — Аналог PAPU.java
  * APU: Square×2, Triangle, Noise, DMC + frame sequencer.
- * Вывод звука через QAudioOutput (Qt Multimedia).
+ * Звук временно отключён (см. NESPAPU.h) — сэмплы считаются, но не
+ * воспроизводятся, Qt Multimedia больше не используется.
  */
 #include "NESPAPU.h"
 #include "NESCPU.h"
-#include <QAudioFormat>
+#include <s32strm.h>
 #include <e32math.h>
 
 // Таблицы периодов каналов (NTSC)
@@ -296,8 +297,7 @@ CNESPAPU::CNESPAPU()
       iRunning(EFalse), iSampleRate(KSampleRate),
       iCyclesPerSample(0), iCycleAcc(0),
       iFrameCounter(0), i5StepMode(EFalse), iIRQInhibit(EFalse),
-      iBufWrite(0), iBufPos(0),
-      iOutputStream(NULL), iStreamOpen(EFalse)
+      iBufWrite(0), iBufPos(0)
 {
     Mem::FillZ(iAudioBuf, sizeof(iAudioBuf));
 }
@@ -314,28 +314,12 @@ void CNESPAPU::ConstructL(CNESCPU* aCpu)
 
     iCyclesPerSample = 41; // 1789773 / 44100
 
-    initAudio();
-}
-
-void CNESPAPU::initAudio()
-{
-    QAudioFormat fmt;
-    fmt.setSampleRate(KSampleRate);
-    fmt.setChannelCount(1);
-    fmt.setSampleSize(16);
-    fmt.setCodec("audio/pcm");
-    fmt.setByteOrder(QAudioFormat::LittleEndian);
-    fmt.setSampleType(QAudioFormat::SignedInt);
-
-    iAudioOutput = new QAudioOutput(fmt);
-    iAudioOutput->setBufferSize(KAudioBufSamples * 2 * 2); // двойная буферизация
-    iAudioDevice = iAudioOutput->start(); // push mode
+    // Звук временно отключён (см. NESPAPU.h) — initAudio() убран.
 }
 
 CNESPAPU::~CNESPAPU()
 {
     Stop();
-    delete iAudioOutput;
     delete iSq1; delete iSq2; delete iTri; delete iNoise; delete iDMC;
 }
 
@@ -446,18 +430,9 @@ void CNESPAPU::MixSample()
 
 void CNESPAPU::FlushBuffer()
 {
-    if (!iAudioDevice || !iRunning) return;
-
-    TInt src = iBufWrite ^ 1;
-    const char* data = reinterpret_cast<const char*>(iAudioBuf[src]);
-    qint64 len       = KAudioBufSamples * sizeof(s16);
-    qint64 written   = 0;
-    while (written < len)
-    {
-        qint64 n = iAudioDevice->write(data + written, len - written);
-        if (n <= 0) break;
-        written += n;
-    }
+    // Звук временно отключён — сэмплы посчитаны в iAudioBuf, но никуда
+    // не выводятся. Сюда позже встанет нативный Symbian аудио-вывод
+    // (например CMdaAudioOutputStream) вместо прежнего QIODevice::write().
 }
 
 void CNESPAPU::SetSampleRate(TInt aRate)

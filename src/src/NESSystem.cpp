@@ -11,6 +11,7 @@
 #include "NESROM.h"
 #include "NESTypes.h"
 #include <s32file.h>
+#include <s32strm.h>
 #include <f32file.h>
 
 // ---------------------------------------------------------------------------
