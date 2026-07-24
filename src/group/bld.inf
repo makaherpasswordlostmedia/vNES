@@ -11,7 +11,7 @@
  */
 
 PRJ_PLATFORMS
-GCCE
+ARMV5 GCCE
 
 PRJ_MMPFILES
 vnes.mmp
