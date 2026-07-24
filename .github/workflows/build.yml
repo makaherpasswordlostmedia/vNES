@@ -682,11 +682,8 @@ jobs:
           "${{ steps.tools.outputs.sbs }}" -c arm.v5.urel.gcce12_1_0 --config-list 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
           echo "--- sbs --alias-list (полный список известных алиасов/групп -c) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
           "${{ steps.tools.outputs.sbs }}" --alias-list 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
-          echo "--- sbs -b bld.inf -c arm.v5.urel.gcce12_1_0 --dry-run (что реально запланировано к сборке, без выполнения) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
-          "${{ steps.tools.outputs.sbs }}" -b "$(pwd)/bld.inf" -c arm.v5.urel.gcce12_1_0 --dry-run 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
-          echo "--- sbs -b bld.inf -c arm.v5.urel.gcce12_1_0 -f - --filelist (список файлов, которые Raptor реально включил бы в сборку) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
-          "${{ steps.tools.outputs.sbs }}" -b "$(pwd)/bld.inf" -c arm.v5.urel.gcce12_1_0 --filelist="$GITHUB_WORKSPACE/build_vnes_filelist.log" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
-          cat "$GITHUB_WORKSPACE/build_vnes_filelist.log" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
+          echo "--- Прямой запуск препроцессора над bld.inf (то же, что видит Raptor после макроподстановки) ---" | tee -a "$GITHUB_WORKSPACE/build_vnes.log"
+          gcc -E -x c -undef -DGCCE -I"$GITHUB_WORKSPACE/epocroot/epoc32/include" -I"$GITHUB_WORKSPACE/epocroot/epoc32/include/variant" "$(pwd)/bld.inf" 2>&1 | grep -v "^#" | tee -a "$GITHUB_WORKSPACE/build_vnes.log" || true
           "${{ steps.tools.outputs.sbs }}" -b "$(pwd)/bld.inf" -c arm.v5.urel.gcce12_1_0 2>&1 | tee -a "$GITHUB_WORKSPACE/build_vnes.log" \
             || { echo "::error::Компиляция vNES завершилась с ошибкой. См. build_vnes.log."; exit 1; }
           # -d по неясной причине не даёт debug-вывода в этой версии/сборке
