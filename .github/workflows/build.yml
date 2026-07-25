@@ -579,6 +579,55 @@ jobs:
             echo "  ::warning::клонирование не удалось/таймаут, см. /tmp/clone_sh.log"
           fi
 
+          echo "--- Клонирую SymbianSource/oss.FCL.sf.os.kernelhwsrv (официальный OSS-репо ядра, ожидаю e32svr.h) ---"
+          timeout 180 git clone --depth 1 https://github.com/SymbianSource/oss.FCL.sf.os.kernelhwsrv.git khw > /tmp/clone_khw.log 2>&1
+          if [ -d khw ]; then
+            find khw -type f -printf '%f\n' 2>/dev/null >> "$EXT_NAMES_FILE"
+            echo "  файлов добавлено в сравнение: $(find khw -type f | wc -l)"
+            echo "  Прямая проверка e32svr.h в этом репо:"
+            E32SVR_FOUND=$(find khw -iname "e32svr.h" 2>/dev/null | head -1)
+            if [ -n "$E32SVR_FOUND" ]; then
+              echo "    НАЙДЕН: $E32SVR_FOUND"
+              if [ ! -f epocroot/epoc32/include/e32svr.h ]; then
+                mkdir -p epocroot/epoc32/include
+                cp -v "$E32SVR_FOUND" epocroot/epoc32/include/e32svr.h
+                echo "    -> скопирован в epoc32/include (ранее там отсутствовал)."
+              else
+                echo "    epoc32/include/e32svr.h уже существует — не перезаписываю."
+              fi
+            else
+              echo "    не найден в этом репозитории."
+            fi
+          else
+            echo "  ::warning::клонирование не удалось/таймаут, см. /tmp/clone_khw.log"
+          fi
+
+          echo "--- Клонирую SymbianSource/oss.FCL.sftools.dev.build (официальные build tools, ожидаю rcomp) ---"
+          timeout 180 git clone --depth 1 https://github.com/SymbianSource/oss.FCL.sftools.dev.build.git sfbuild > /tmp/clone_sfbuild.log 2>&1
+          if [ -d sfbuild ]; then
+            find sfbuild -type f -printf '%f\n' 2>/dev/null >> "$EXT_NAMES_FILE"
+            echo "  файлов добавлено в сравнение: $(find sfbuild -type f | wc -l)"
+            echo "  Прямая проверка rcomp/*rcomp* в этом репо:"
+            find sfbuild -iname "*rcomp*" 2>/dev/null | head -20
+            RCOMP_FOUND=$(find sfbuild -iname "rcomp" -type f 2>/dev/null | head -1)
+            if [ -n "$RCOMP_FOUND" ]; then
+              RCOMP_FILETYPE=$(file -b "$RCOMP_FOUND" 2>/dev/null || echo "неизвестно")
+              echo "    Найден кандидат: $RCOMP_FOUND (тип: $RCOMP_FILETYPE)"
+              if echo "$RCOMP_FILETYPE" | grep -qiE "ELF|executable" && [ ! -f epocroot/epoc32/tools/rcomp ]; then
+                mkdir -p epocroot/epoc32/tools
+                cp -v "$RCOMP_FOUND" epocroot/epoc32/tools/rcomp
+                chmod +x epocroot/epoc32/tools/rcomp
+                echo "    -> похоже на настоящий бинарник, скопирован и сделан исполняемым."
+              else
+                echo "    -> не похоже на готовый бинарник (см. тип выше), либо уже существует — не копирую. Вероятно, это исходники, требующие отдельной сборки."
+              fi
+            else
+              echo "    готового файла 'rcomp' не найдено в этом репозитории."
+            fi
+          else
+            echo "  ::warning::клонирование не удалось/таймаут, см. /tmp/clone_sfbuild.log"
+          fi
+
           echo "--- archive.org: другие SDK/tools-архивы (metadata API, без скачивания содержимого) ---"
           for item in nokia_sdks_n_dev_tools nokia_sdks_n_dev_tools2 nokia_sdks_n_dev_tools3; do
             timeout 60 curl -s --max-filesize 209715200 "https://archive.org/metadata/$item" -o "/tmp/${item}.json"
@@ -979,6 +1028,90 @@ jobs:
           # скомпилированного файла. Чистим кэш явно перед реальной сборкой.
           EPOCROOT="$GITHUB_WORKSPACE/epocroot/"
           find "${EPOCROOT}epoc32/build" -maxdepth 1 \( -name 'toolcheck_cache_*' -o -name 'Makefile_all*' -o -name 'Makefile.*.log' \) -print -delete 2>/dev/null || true
+
+      - name: TRIAL — SymbianRevive/ERA epocstrap (изолированно, не влияет на основной epocroot)
+        continue-on-error: true
+        run: |
+          set +e
+          # ЭКСПЕРИМЕНТАЛЬНЫЙ шаг. Цель — посмотреть, что реально делает
+          # epocstrap на GitHub Actions, и есть ли в результирующем
+          # EPOCROOT avkon.rh/e32svr.h/rcomp — без риска сломать уже
+          # рабочий пайплайн выше. Работает ПОЛНОСТЬЮ в /tmp/era_trial,
+          # никак не трогает $GITHUB_WORKSPACE/epocroot ни на чтение, ни
+          # на запись. continue-on-error на уровне шага + set +e внутри —
+          # двойная защита: что бы здесь ни случилось (нехватка idmap,
+          # отсутствие privileged-доступа для mount/losetup, сетевые
+          # проблемы), это не должно уронить остальной job.
+          mkdir -p /tmp/era_trial && cd /tmp/era_trial
+
+          echo "=================================================================="
+          echo "Клонирую SymbianRevive/ERA..."
+          echo "=================================================================="
+          timeout 120 git clone --single-branch https://github.com/SymbianRevive/ERA.git era/ > clone_era.log 2>&1
+          if [ ! -d era ]; then
+            echo "::warning::Клонирование ERA не удалось или таймаут. Лог:"
+            cat clone_era.log
+            exit 0
+          fi
+
+          echo "--- Содержимое репозитория (verkhний уровень) ---"
+          find era -maxdepth 2
+
+          echo "=================================================================="
+          echo "Смотрю requirements/help (bin/epocstrap -h) без реального запуска сборки"
+          echo "=================================================================="
+          cd era
+          chmod +x bin/epocstrap 2>/dev/null
+          timeout 60 bin/epocstrap -h > /tmp/era_trial/epocstrap_help.log 2>&1
+          HELP_RC=$?
+          echo "Код возврата epocstrap -h: $HELP_RC"
+          echo "--- Вывод ---"
+          cat /tmp/era_trial/epocstrap_help.log
+
+          echo "=================================================================="
+          echo "Проверяю поддержку idmap в этом ядре (заявленное требование ERA)"
+          echo "=================================================================="
+          echo "Ядро: $(uname -r)"
+          if [ -f /proc/self/uid_map ]; then
+            echo "uid_map существует: $(cat /proc/self/uid_map 2>/dev/null || echo 'нет доступа')"
+          else
+            echo "/proc/self/uid_map недоступен."
+          fi
+          unshare --map-root-user echo "unshare --map-root-user: OK" 2>&1 || echo "unshare --map-root-user: НЕ РАБОТАЕТ (код $?)"
+
+          echo "=================================================================="
+          echo "Пробую реальный запуск epocstrap (может потребовать sudo/privileged для mount/losetup —"
+          echo "если упадёт, это ожидаемо и не критично, просто фиксируем ЧТО именно пошло не так)"
+          echo "=================================================================="
+          timeout 600 bin/epocstrap -r /tmp/era_trial/epocroot.ext4 modern-gcc gcce > /tmp/era_trial/epocstrap_run.log 2>&1
+          RUN_RC=$?
+          echo "Код возврата: $RUN_RC"
+          echo "--- Последние 100 строк вывода ---"
+          tail -100 /tmp/era_trial/epocstrap_run.log
+
+          if [ "$RUN_RC" -eq 0 ] && [ -f /tmp/era_trial/epocroot.ext4 ]; then
+            echo "=================================================================="
+            echo "epocstrap вернул 0 и создал образ — пробую смонтировать и поискать наши три файла"
+            echo "=================================================================="
+            mkdir -p /tmp/era_trial/mnt
+            sudo mount -o loop /tmp/era_trial/epocroot.ext4 /tmp/era_trial/mnt 2>&1
+            MOUNT_RC=$?
+            if [ "$MOUNT_RC" -eq 0 ]; then
+              echo "Смонтировано успешно. Ищу наши три файла:"
+              find /tmp/era_trial/mnt -iname "avkon.rh" 2>/dev/null | head -5
+              find /tmp/era_trial/mnt -iname "e32svr.h" 2>/dev/null | head -5
+              find /tmp/era_trial/mnt -iname "rcomp" 2>/dev/null | head -5
+              sudo umount /tmp/era_trial/mnt 2>&1 || true
+            else
+              echo "::warning::Не удалось смонтировать образ (код $MOUNT_RC) — возможно, нужны права/loop-устройства, недоступные в этом раннере."
+            fi
+          else
+            echo "epocstrap не завершился успешно (код $RUN_RC) или не создал образ — см. лог выше для причины."
+          fi
+          echo "=================================================================="
+          echo "Конец пробного шага ERA/epocstrap."
+          echo "=================================================================="
+          set -e
 
       - name: Build vNES with sbs
         working-directory: vnes-src/src/group
