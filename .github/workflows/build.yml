@@ -219,8 +219,8 @@ jobs:
           # если он всё же проходит. Убираем -q и сохраняем полный лог,
           # чтобы при частичном успехе (redundant CRC errors и т.п.) это
           # было видно, а не только "молча меньше файлов, чем нужно".
-          unzip pdk.zip -d pdk_extracted > /tmp/pdk_unzip_top.log 2>&1
-          UNZIP_RC=$?
+          unzip pdk.zip -d pdk_extracted > /tmp/pdk_unzip_top.log 2>&1 || UNZIP_RC=$?
+          UNZIP_RC=${UNZIP_RC:-0}
           tail -40 /tmp/pdk_unzip_top.log
           if [ "$UNZIP_RC" -ne 0 ]; then
             echo "::error::unzip pdk.zip завершился с кодом $UNZIP_RC (0 = успех, 1/2 = предупреждения, >=3 = ошибка). Полный лог выше/в /tmp/pdk_unzip_top.log — PDK, скорее всего, распакован не полностью."
@@ -242,22 +242,24 @@ jobs:
               BEFORE=$(find epocroot -type f 2>/dev/null | wc -l)
               if unzip -tq "$z" >/dev/null 2>&1; then
                 echo "    (настоящий zip, целостность OK) распаковываю..."
-                unzip -o "$z" -d epocroot/ > "/tmp/unzip_$(basename "$z").log" 2>&1
-                RC=$?
+                unzip -o "$z" -d epocroot/ > "/tmp/unzip_$(basename "$z").log" 2>&1 || RC=$?
+                RC=${RC:-0}
                 if [ "$RC" -ne 0 ]; then
                   echo "::error::unzip $z завершился с кодом $RC — PDK будет неполным. Хвост лога:"
                   tail -40 "/tmp/unzip_$(basename "$z").log"
                   exit 1
                 fi
+                unset RC
               else
                 echo "    (unzip -t провалился — не настоящий zip или повреждён), пробую 7z..."
-                7z x "$z" -oepocroot/ -y > /tmp/7z_$(basename "$z").log 2>&1
-                RC=$?
+                7z x "$z" -oepocroot/ -y > /tmp/7z_$(basename "$z").log 2>&1 || RC=$?
+                RC=${RC:-0}
                 if [ "$RC" -ne 0 ]; then
                   echo "::error::7z тоже не смог распаковать $z (код $RC) — PDK будет неполным. Лог:"
                   cat "/tmp/7z_$(basename "$z").log"
                   exit 1
                 fi
+                unset RC
               fi
               AFTER=$(find epocroot -type f 2>/dev/null | wc -l)
               echo "  Файлов в epocroot до/после: $BEFORE -> $AFTER (добавлено: $((AFTER - BEFORE)))"
@@ -286,12 +288,22 @@ jobs:
             for z in $NESTED2; do
               echo "  === $z ==="
               BEFORE=$(find epocroot -type f 2>/dev/null | wc -l)
-              unzip -oq "$z" -d epocroot/ > "/tmp/unzip2_$(basename "$z").log" 2>&1
-              RC=$?
+              # ВАЖНО: этот блок работает под `set -e` (см. верх шага).
+              # Без "|| RC=$?" ненулевой код возврата unzip убивает ВЕСЬ
+              # шаг прямо на этой строке, не доходя даже до следующей
+              # строки "RC=$?" — и, что хуже, не доходя до точечного
+              # копирования avkon.rh/e32svr.h/rcomp ниже по скрипту,
+              # если проблемный архив попался раньше него в списке.
+              # Именно это произошло в предыдущем прогоне на
+              # src_oss_app_videoeditor.zip: шаг оборвался, ни разу не
+              # дойдя до поиска нужных трёх файлов.
+              unzip -oq "$z" -d epocroot/ > "/tmp/unzip2_$(basename "$z").log" 2>&1 || RC=$?
+              RC=${RC:-0}
               if [ "$RC" -ne 0 ]; then
                 echo "::warning::unzip $z (второй уровень) завершился с кодом $RC — этот компонент может быть неполным. Хвост лога:"
                 tail -20 "/tmp/unzip2_$(basename "$z").log"
               fi
+              unset RC
               AFTER=$(find epocroot -type f 2>/dev/null | wc -l)
               echo "  Файлов в epocroot до/после: $BEFORE -> $AFTER (добавлено: $((AFTER - BEFORE)))"
               # Удаляем сам .zip после распаковки — иначе он путается в
