@@ -352,6 +352,20 @@ jobs:
           echo "ЧЕК 1/2: список файлов ВНУТРИ pdk.zip vs что реально попало в epocroot/"
           echo "(ловит баги распаковки — файл заявлен в архиве, но не долетел на диск)"
           echo "=================================================================="
+          # ВАЖНО: PDK_3_0_4_a.zip — это полный дистрибутив Symbian^3
+          # (сотни тысяч записей: build_info/, release notes, сторонние
+          # SDK типа UIQ/SEMC Java ME и т.п.), из которого в epocroot
+          # намеренно распаковывается только релевантное подмножество
+          # (headers/libs/tools). Сравнение ВСЕХ имён из архива со всем
+          # epocroot в предыдущей версии этого чека давало 271938 из
+          # 272066 "не найдено" — почти весь этот шум был ожидаемым
+          # (build_info/*, сторонние .zip/.exe инсталляторы), а не
+          # реальными пропусками, и топил единичные полезные совпадения.
+          #
+          # Сужаем до типов файлов, которые реально нужны для сборки:
+          # заголовки/ресурсные файлы Symbian и файлы без расширения
+          # (потенциальные бинарники host-тулов вроде rcomp).
+          RELEVANT_EXT_RE='\.(h|rh|hrh|inl|mmh|rsg|rss|mmp|mbg)$'
           # Список имён (basename) из вложенных архивов — без распаковки,
           # только заголовки zip/7z. Это дёшево даже для архивов на
           # гигабайты и на миллионы записей (unzip -l / 7z l не читают
@@ -377,30 +391,40 @@ jobs:
               ' /tmp/_listing.txt | sed 's/^ *//' >> "$ARCHIVE_NAMES_FILE"
             fi
           done
+          # basename + фильтр по релевантным расширениям — режем шум от
+          # build_info/сторонних архивов до сравнения, а не после.
+          # ОТДЕЛЬНО добавляем файлы без расширения из путей вида
+          # .../tools/... — это потенциальные бинарники host-инструментов
+          # (например rcomp), которые не попадают под RELEVANT_EXT_RE, но
+          # критично важны и иначе выпали бы из сравнения совсем.
+          grep -iE "$RELEVANT_EXT_RE" "$ARCHIVE_NAMES_FILE" | sed -E 's#.*/##' > "${ARCHIVE_NAMES_FILE}.relevant"
+          grep -iE '/tools/[^./]+$' "$ARCHIVE_NAMES_FILE" | sed -E 's#.*/##' >> "${ARCHIVE_NAMES_FILE}.relevant"
+          mv "${ARCHIVE_NAMES_FILE}.relevant" "$ARCHIVE_NAMES_FILE"
           ARCHIVE_TOTAL=$(wc -l < "$ARCHIVE_NAMES_FILE")
-          echo "Всего имён файлов, заявленных внутри вложенных архивов PDK: $ARCHIVE_TOTAL"
+          echo "Всего РЕЛЕВАНТНЫХ имён файлов (заголовки/ресурсы) внутри вложенных архивов PDK: $ARCHIVE_TOTAL"
+          echo "(нерелевантные — build_info, сторонние SDK-инсталляторы и т.п. — отфильтрованы заранее, не участвуют в сравнении)"
 
           if [ "$ARCHIVE_TOTAL" -gt 0 ]; then
-            # basename каждого заявленного файла vs basename того, что
-            # реально есть на диске в epocroot — считаем только те
-            # заявленные имена, которых нет НИГДЕ в epocroot ни по какому
-            # пути (это самый дешёвый безопасный тест: полное совпадение
-            # имени файла, без сравнения путей и содержимого).
+            # То же самое сужение применяем и к диску — иначе сравнение
+            # "релевантное из архива" vs "всё подряд с диска" всё ещё
+            # будет однобоким (хотя и не даст ложных совпадений, само по
+            # себе не проблема, но для симметрии и ясности вывода лучше
+            # держать одинаковый фильтр по обе стороны).
             DISK_NAMES_FILE=/tmp/epocroot_names.txt
             find epocroot -type f -printf '%f\n' 2>/dev/null | sort -u > "$DISK_NAMES_FILE"
             DISK_TOTAL=$(wc -l < "$DISK_NAMES_FILE")
-            echo "Всего уникальных имён файлов на диске в epocroot/: $DISK_TOTAL"
+            echo "Всего уникальных имён файлов на диске в epocroot/ (без фильтра, для справки): $DISK_TOTAL"
 
             sort -u "$ARCHIVE_NAMES_FILE" -o "$ARCHIVE_NAMES_FILE.sorted"
             MISSING_FROM_DISK=$(comm -23 "$ARCHIVE_NAMES_FILE.sorted" "$DISK_NAMES_FILE")
             MISSING_FROM_DISK_COUNT=$(echo -n "$MISSING_FROM_DISK" | grep -c . || true)
-            echo "Заявлены в архиве, но НЕ найдены на диске (по имени файла): $MISSING_FROM_DISK_COUNT"
+            echo "Заявлены в архиве (релевантные типы), но НЕ найдены на диске (по имени файла): $MISSING_FROM_DISK_COUNT"
             if [ "$MISSING_FROM_DISK_COUNT" -gt 0 ]; then
-              echo "Первые 30 (полный список большим не печатаем, чтобы не раздувать лог):"
-              echo "$MISSING_FROM_DISK" | head -30 | sed 's/^/  - /'
+              echo "Первые 100 (полный список большим не печатаем, чтобы не раздувать лог):"
+              echo "$MISSING_FROM_DISK" | head -100 | sed 's/^/  - /'
             fi
           else
-            echo "::warning::Не удалось прочитать листинг ни одного вложенного архива (unzip -l и 7z l оба не сработали) — чек 1 пропущен."
+            echo "::warning::Не удалось прочитать листинг ни одного вложенного архива (unzip -l и 7z l оба не сработали), либо ни одного релевантного файла не найдено — чек 1 пропущен."
           fi
 
           echo "=================================================================="
@@ -422,7 +446,19 @@ jobs:
           fi
 
           echo "--- Клонирую SymbianRevive/symbian-headers ---"
-          timeout 180 git clone --depth 1 --filter=blob:none --sparse https://github.com/SymbianRevive/symbian-headers.git sh > /tmp/clone_sh.log 2>&1
+          # ВАЖНО: раньше здесь стоял --filter=blob:none --sparse, что
+          # БЕЗ последующего `git sparse-checkout set` ограничивает
+          # чек-аут только верхним уровнем репозитория (в предыдущем
+          # прогоне это дало всего 2658 файлов вместо реальных десятков
+          # тысяч заголовков — avkon.rh/e32svr.h физически не попадали
+          # в сравнение, даже если лежали в репозитории). Обычный полный
+          # shallow-clone безопаснее для наших целей: --depth 1 уже
+          # ограничивает объём (только последний коммит, без истории),
+          # timeout ограничивает время; если репозиторий окажется
+          # неожиданно огромным по факту (не по нашим текущим оценкам),
+          # он просто упадёт по таймауту и уйдёт в ::warning::, не сломав
+          # сборку.
+          timeout 180 git clone --depth 1 https://github.com/SymbianRevive/symbian-headers.git sh > /tmp/clone_sh.log 2>&1
           if [ -d sh ]; then
             find sh -type f -printf '%f\n' 2>/dev/null >> "$EXT_NAMES_FILE"
             echo "  файлов добавлено в сравнение: $(find sh -type f | wc -l)"
