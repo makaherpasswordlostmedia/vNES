@@ -270,15 +270,116 @@ jobs:
             cp -r pdk_extracted/* epocroot/ 2>/dev/null || true
           fi
 
+          # ==================================================================
+          # ВТОРОЙ ПРОХОД: src_oss_*.zip (mw/os/app/adapt/tools/incubator) —
+          # это "архивы архивов". Первый проход распаковывает их в
+          # epocroot/, но результат — НЕ заголовки/тулы напрямую, а ЕЩЁ
+          # zip-файлы по компонентам (например epocroot/src_oss_mw_classicui.zip,
+          # epocroot/src_oss_os_kernelhwsrv.zip, epocroot/src_oss_os_textandloc.zip).
+          # Именно внутри ЭТИХ вложенных архивов, судя по названиям
+          # компонентов, лежат avkon.rh (Classic UI / Avkon), e32svr.h
+          # (kernelhwsrv) и rcomp (textandloc — resource compiler). Раньше
+          # эти файлы никогда не распаковывались дальше первого уровня.
+          NESTED2=$(find epocroot -maxdepth 1 -iname "src_oss_*.zip")
+          if [ -n "$NESTED2" ]; then
+            echo "Найдены вложенные src_oss_*.zip второго уровня, распаковываю каждый:"
+            for z in $NESTED2; do
+              echo "  === $z ==="
+              BEFORE=$(find epocroot -type f 2>/dev/null | wc -l)
+              unzip -oq "$z" -d epocroot/ > "/tmp/unzip2_$(basename "$z").log" 2>&1
+              RC=$?
+              if [ "$RC" -ne 0 ]; then
+                echo "::warning::unzip $z (второй уровень) завершился с кодом $RC — этот компонент может быть неполным. Хвост лога:"
+                tail -20 "/tmp/unzip2_$(basename "$z").log"
+              fi
+              AFTER=$(find epocroot -type f 2>/dev/null | wc -l)
+              echo "  Файлов в epocroot до/после: $BEFORE -> $AFTER (добавлено: $((AFTER - BEFORE)))"
+              # Удаляем сам .zip после распаковки — иначе он путается в
+              # последующих find/diff как "файл" наравне с реальными
+              # заголовками, и раздувает epocroot лишним весом.
+              rm -f "$z"
+            done
+          else
+            echo "Вложенных src_oss_*.zip второго уровня не найдено (либо их не было в этом PDK, либо структура архива отличается — не фатально)."
+          fi
+
           echo "Проверяю наличие epoc32/ в EPOCROOT:"
           find epocroot -maxdepth 2 -iname "epoc32" || true
           echo "Полное дерево верхнего уровня epocroot/ (для диагностики):"
           find epocroot -maxdepth 3 -type d
 
+          # ==================================================================
+          # ТОЧЕЧНЫЙ ФИКС: копируем avkon.rh / e32svr.h / rcomp из только
+          # что распакованных src_oss_* деревьев (см. блок выше) в места,
+          # куда реально смотрит sbs — epoc32/include и epoc32/tools.
+          #
+          # Почему точечно, а не просто "слить весь src_oss в epoc32/include":
+          #   - src_oss_* — это ИСХОДНИКИ (kernel/, textrendering/ и т.п.),
+          #     там могут быть файлы с такими же именами, но другим
+          #     содержимым/версией, чем уже собранный PDK headers/libs —
+          #     слепое слияние рискует тихо подменить рабочие заголовки.
+          #   - rcomp внутри src_oss_os_textandloc, скорее всего, тоже
+          #     исходник (.cpp/.mmp), а не готовый Linux-бинарник — если
+          #     готового бинарника не найдётся, это будет видно по логу
+          #     ниже явно, а не тихим "нашли что-то и скопировали не то".
+          echo "=================================================================="
+          echo "Точечный поиск и копирование avkon.rh / e32svr.h / rcomp из src_oss_*"
+          echo "=================================================================="
+
+          copy_first_match() {
+            # $1 = имя файла для поиска, $2 = целевая директория
+            local name="$1" dest="$2"
+            local found
+            found=$(find epocroot/src_oss_* -iname "$name" 2>/dev/null | head -1)
+            if [ -n "$found" ]; then
+              mkdir -p "$dest"
+              cp -v "$found" "$dest/" 2>&1
+              echo "  -> скопировано из: $found"
+              return 0
+            else
+              echo "  '$name' не найден нигде в epocroot/src_oss_* деревьях."
+              return 1
+            fi
+          }
+
+          echo "--- avkon.rh (ожидаю в src_oss_mw_classicui) ---"
+          copy_first_match "avkon.rh" "epocroot/epoc32/include" || true
+
+          echo "--- e32svr.h (ожидаю в src_oss_os_kernelhwsrv) ---"
+          copy_first_match "e32svr.h" "epocroot/epoc32/include" || true
+
+          echo "--- rcomp (бинарник; ожидаю в src_oss_os_textandloc, но там могут быть только исходники) ---"
+          # Не фильтруем по -executable: бит "исполняемый" мог быть
+          # потерян при упаковке архива, даже если файл на самом деле
+          # является рабочим ELF-бинарником — это не повод его пропустить.
+          # Вместо этого находим по имени и сами выставляем chmod +x,
+          # а после проверяем через `file`, что это действительно похоже
+          # на бинарник (ELF), а не текстовый исходник с таким же именем.
+          RCOMP_CANDIDATE=$(find epocroot/src_oss_* -iname "rcomp" -type f 2>/dev/null | head -1)
+          if [ -n "$RCOMP_CANDIDATE" ]; then
+            FILETYPE=$(file -b "$RCOMP_CANDIDATE" 2>/dev/null || echo "неизвестно")
+            echo "  Найден кандидат: $RCOMP_CANDIDATE"
+            echo "  Тип файла: $FILETYPE"
+            if echo "$FILETYPE" | grep -qiE "ELF|executable"; then
+              mkdir -p epocroot/epoc32/tools
+              cp -v "$RCOMP_CANDIDATE" epocroot/epoc32/tools/rcomp
+              chmod +x epocroot/epoc32/tools/rcomp
+              echo "  -> похоже на настоящий бинарник, скопирован и сделан исполняемым."
+            else
+              echo "  -> НЕ похоже на бинарник (см. тип выше) — не копирую, чтобы не подсунуть sbs исходник вместо тула."
+            fi
+          else
+            echo "  Готового файла 'rcomp' не найдено в src_oss_*."
+            echo "  Ищу исходники rcomp для справки (потребуют отдельной сборки):"
+            find epocroot/src_oss_* -iname "*rcomp*" 2>/dev/null | head -20
+          fi
+          echo "=================================================================="
+
           echo "--- Сохраняю логи распаковки вложенных PDK-архивов для диагностики в артефактах ---"
           mkdir -p "$GITHUB_WORKSPACE/pdk_extract_logs"
           cp /tmp/pdk_unzip_top.log "$GITHUB_WORKSPACE/pdk_extract_logs/" 2>/dev/null || true
           cp /tmp/unzip_*.log "$GITHUB_WORKSPACE/pdk_extract_logs/" 2>/dev/null || true
+          cp /tmp/unzip2_*.log "$GITHUB_WORKSPACE/pdk_extract_logs/" 2>/dev/null || true
           cp /tmp/7z_*.log "$GITHUB_WORKSPACE/pdk_extract_logs/" 2>/dev/null || true
           echo "Скопировано файлов логов: $(ls "$GITHUB_WORKSPACE/pdk_extract_logs" 2>/dev/null | wc -l)"
 
