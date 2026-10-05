@@ -11,7 +11,8 @@ on:
   workflow_dispatch:
 
 env:
-  SDK_VERSION: "0.1.1"
+  SDK_VERSION: "0.1.0"
+  GH_TOKEN: ${{ github.token }}
 
 jobs:
   bootstrap:
@@ -30,8 +31,11 @@ jobs:
           python -m venv "$HOME/venv"
           . "$HOME/venv/bin/activate"
           pip install --upgrade symbian-platform
-          asset="symbian-sdk-${SDK_VERSION}-linux-$(uname -m).tar.gz"
-          curl -fL "https://github.com/hpnkv/symbian-platform/releases/download/v${SDK_VERSION}/${asset}" -o symbian-sdk.tar.gz
+          # список файлов релиза (для лога), потом качаем нужный по маске
+          gh release view "v${SDK_VERSION}" --repo hpnkv/symbian-platform --json assets --jq '.assets[].name'
+          gh release download "v${SDK_VERSION}" --repo hpnkv/symbian-platform \
+            --pattern "symbian-sdk-*linux-x86_64*.tar.gz" --output symbian-sdk.tar.gz
+          ls -la symbian-sdk.tar.gz
           symbian sdk install "$HOME/symbian-sdk" --archive symbian-sdk.tar.gz
           symbian doctor || true
 
