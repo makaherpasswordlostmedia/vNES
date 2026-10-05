@@ -61,6 +61,56 @@ jobs:
           symbian package --project . --artifact "$exe" --output .symbian/package
           symbian inspect --format sis .symbian/package/*.sis
 
+      - name: Probe vNES core against the SDK compiler
+        if: always()
+        continue-on-error: true
+        run: |
+          . "$HOME/venv/bin/activate"
+          mkdir -p out/probe
+          P="$HOME/vnes_app"
+          {
+            echo "===== SDK headers we need ====="
+            for h in e32base.h e32std.h f32file.h s32file.h s32strm.h w32std.h; do
+              echo "--- $h"; find "$HOME/symbian-sdk" -name "$h" 2>/dev/null | head -3
+            done
+            echo; echo "===== starter sources ====="
+            ls -la "$P"
+            for f in model.h model.cc app.cc symbian.toml; do echo "----- $f -----"; cat "$P/$f" 2>/dev/null; done
+          } > out/probe/starter.txt 2>&1 || true
+
+          # Берём реальную команду компиляции app.cc из compile_commands.json
+          cc="$(find "$P" "$HOME" -name compile_commands.json -not -path '*/node_modules/*' 2>/dev/null | head -1)"
+          echo "compile_commands: $cc" | tee out/probe/core-compile.txt
+          python3 - "$cc" "$GITHUB_WORKSPACE" > out/probe/core-compile-run.txt 2>&1 <<'PY' || true
+          import json, os, shlex, subprocess, sys, glob
+          cc, ws = sys.argv[1], sys.argv[2]
+          if not cc or not os.path.exists(cc):
+              print("no compile_commands.json"); sys.exit(0)
+          db = json.load(open(cc))
+          base = next((e for e in db if e["file"].endswith("app.cc")), db[0])
+          cmd = base.get("command") or " ".join(base["arguments"])
+          args = shlex.split(cmd)
+          # убираем -o X, -c, -MD/-MF и исходник
+          out, skip = [], False
+          for a in args:
+              if skip: skip = False; continue
+              if a in ("-o", "-MF", "-MT"): skip = True; continue
+              if a in ("-c", "-MD", "-MMD") or a.endswith((".cc", ".cpp", ".c")): continue
+              out.append(a)
+          core = sorted(glob.glob(ws + "/src/src/*.cpp"))
+          core = [f for f in core if not f.endswith(("NESWidget.cpp", "main.cpp"))]
+          ok = bad = 0
+          for f in core:
+              r = subprocess.run(out + ["-x", "c++", "-fsyntax-only", "-I", ws + "/src/inc", f],
+                                 capture_output=True, text=True, cwd=base["directory"])
+              status = "OK " if r.returncode == 0 else "ERR"
+              ok += r.returncode == 0; bad += r.returncode != 0
+              print("=====", status, os.path.basename(f))
+              print("\n".join(r.stderr.splitlines()[:25]))
+          print(f"\nSUMMARY: {ok} ok, {bad} failed")
+          PY
+          cat out/probe/core-compile-run.txt | tail -80
+
       - name: Collect output
         if: always()
         run: |
@@ -74,6 +124,13 @@ jobs:
         with:
           name: scaffold
           path: out/scaffold
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe
+          path: out/probe
+          if-no-files-found: warn
 
       - uses: actions/upload-artifact@v4
         if: always()
