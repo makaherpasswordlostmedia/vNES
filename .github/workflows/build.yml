@@ -16,7 +16,7 @@ env:
 
 jobs:
   bootstrap:
-    # Архив SDK требует glibc >= 2.39, это Ubuntu 24.04
+    # Архив хоста/SDK требует glibc >= 2.39, это Ubuntu 24.04
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -34,8 +34,9 @@ jobs:
           # список файлов релиза (для лога), потом качаем нужный по маске
           gh release view "v${SDK_VERSION}" --repo hpnkv/symbian-platform --json assets --jq '.assets[].name'
           gh release download "v${SDK_VERSION}" --repo hpnkv/symbian-platform \
-            --pattern "symbian-sdk-*linux-x86_64*.tar.gz" --output symbian-sdk.tar.gz
+            --pattern "symbian-host-*linux-x86_64.tar.gz" --output symbian-sdk.tar.gz
           ls -la symbian-sdk.tar.gz
+          symbian sdk --help || true
           symbian sdk install "$HOME/symbian-sdk" --archive symbian-sdk.tar.gz
           symbian doctor || true
 
