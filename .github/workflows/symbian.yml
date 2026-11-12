@@ -179,7 +179,7 @@ jobs:
 
           LIBRARY         euser.lib apparc.lib cone.lib eikcore.lib avkon.lib eikcoctl.lib
           LIBRARY         fbscli.lib bitgdi.lib gdi.lib ws32.lib efsrv.lib
-          LIBRARY         mediaclientaudiostream.lib
+          LIBRARY         mediaclientaudiostream.lib bafl.lib
 
           OPTION          GCCE -O3
           VNES_EOF
