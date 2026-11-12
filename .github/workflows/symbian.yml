@@ -3476,7 +3476,7 @@ jobs:
   build-sis:
     name: Build vnes.sisx
     needs: sources
-    runs-on: macos-14
+    runs-on: ${{ vars.MACOS_RUNNER || 'macos-latest' }}
     timeout-minutes: 360
     steps:
       - uses: actions/download-artifact@v4
