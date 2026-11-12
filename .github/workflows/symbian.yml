@@ -227,8 +227,7 @@ jobs:
 
               enum { KSlots = 4, KSlotBytes = 1600 };
               CMdaAudioOutputStream* iStream;
-              TMdaAudioDataSettings iSettings;
-              TBool iReady;
+                  TBool iReady;
               TBool iSuspended;
               TBuf8<KSlotBytes> iSlot[KSlots];
               TBool iBusy[KSlots];
@@ -491,6 +490,11 @@ jobs:
           // Audio output through CMdaAudioOutputStream (22.05 kHz, mono, PCM16).
           #include "vnes.h"
 
+          // Values of TMdaAudioDataSettings::ESampleRate22050Hz / EChannelsMono (the class is not
+          // visible through the Symbian^3 headers used here).
+          static const TInt KSampleRate22050 = 0x00000008;
+          static const TInt KChannelsMono = 0x00000001;
+
           CVNesAudio* CVNesAudio::NewL()
               {
               CVNesAudio* self = new (ELeave) CVNesAudio;
@@ -530,7 +534,7 @@ jobs:
               TRAPD(err, iStream = CMdaAudioOutputStream::NewL(*this));
               if (err == KErrNone && iStream)
                   {
-                  iStream->Open(&iSettings);
+                  iStream->Open(NULL);
                   }
               }
 
@@ -540,8 +544,8 @@ jobs:
                   {
                   return;
                   }
-              TRAPD(err, iStream->SetAudioPropertiesL(TMdaAudioDataSettings::ESampleRate22050Hz,
-                                                      TMdaAudioDataSettings::EChannelsMono));
+              TRAPD(err, iStream->SetAudioPropertiesL(KSampleRate22050,
+                                                      KChannelsMono));
               if (err != KErrNone)
                   {
                   return;
@@ -828,7 +832,8 @@ jobs:
                   return;
                   }
               TInt dot = iRomPath.LocateReverse('.');
-              TFileName sav = (dot > 0) ? iRomPath.Left(dot) : iRomPath;
+              TFileName sav = iRomPath;
+          if (dot > 0) { sav.SetLength(dot); }
               sav.Append(KExtSav);
               RFile f;
               if (f.Replace(iFs, sav, EFileWrite) == KErrNone)
@@ -870,7 +875,8 @@ jobs:
               if (iNes->HasBattery())
                   {
                   TInt dot = iRomPath.LocateReverse('.');
-                  TFileName sav = (dot > 0) ? iRomPath.Left(dot) : iRomPath;
+                  TFileName sav = iRomPath;
+          if (dot > 0) { sav.SetLength(dot); }
                   sav.Append(KExtSav);
                   RFile sf;
                   if (sf.Open(iFs, sav, EFileRead | EFileShareReadersOnly) == KErrNone)
