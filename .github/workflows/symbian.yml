@@ -1,0 +1,3568 @@
+name: Build Symbian^3 SIS
+
+# SELF-CONTAINED: this single file carries the whole Symbian port (symbian/ tree) and writes it
+# at build time, so the repo only needs the original vNES sources + this workflow.
+#
+# Uses https://github.com/fieldops-dev/symbian3-toolchain, which targets Apple Silicon
+# macOS, so the job runs on a macos-14 (arm64) runner.  The first run builds GCC for
+# arm-none-symbianelf (about 1.5-2 h) and caches the toolchain + SDK; later runs only
+# compile the app (a few minutes).
+
+on:
+  push:
+    branches: [master, main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+env:
+  TOOLCHAIN_REPO: fieldops-dev/symbian3-toolchain
+  TOOLCHAIN_REF: a96f917e6c8f02fe4f7c2186f8df760d3d9d832a
+  SYMBIAN_VOL: /Volumes/Symbian
+  GNUPOC_COMMIT: d3ddaf58c734ad3ab34dc60a012f9d4768a9ed3e
+  GCC4SYMBIAN_COMMIT: fe1b15a1c25716d5c515f12593080d58f14d4c3f
+
+jobs:
+  sources:
+    name: Write port sources
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate symbian/ tree
+        run: |
+          set -e
+          mkdir -p symbian
+          cat > symbian/README.md <<'VNES_EOF'
+          # vNES for Symbian^3
+
+          Native Symbian^3 (Nokia N8, C7, E7, ...) port of the vNES NES emulator, built in
+          GitHub Actions with [fieldops-dev/symbian3-toolchain](https://github.com/fieldops-dev/symbian3-toolchain).
+
+          The original Java sources (`src/`) are untouched. `symbian/` contains:
+
+          | Path | What |
+          |---|---|
+          | `core/` | Portable C++98 NES core (6502, scanline PPU, APU, mappers). No STL, exceptions, RTTI or floating point |
+          | `app/` | Avkon front end: ROM browser, touch pad, overlay menu, MMF audio output, `bld.inf`/`.mmp`/`.pkg` |
+          | `tools/host_test.cpp` | Desktop harness: nestest trace comparison, frame dump |
+          | `tools/gen_cpu_table.py` | Generates `core/nes_cpu_table.h` |
+
+          ## Build (CI)
+
+          `.github/workflows/symbian.yml` runs on a `macos-14` runner (the toolchain is Apple Silicon only):
+          creates the case-sensitive volume, builds GCC 14.2 for `arm-none-symbianelf`, installs the Symbian^3 SDK,
+          runs `bldmake bldfiles && abld build gcce urel` and `package-sis.sh`, then uploads `vnes.sisx`.
+          The first run takes ~2 h; the toolchain is cached afterwards. Tags `v*` attach the SIS to a release.
+
+          Local build on an Apple Silicon Mac, after following the toolchain README:
+
+              source symbian3-toolchain/Scripts/env.sh
+              cd symbian/app/group && bldmake bldfiles && abld build gcce urel
+              $N8_REPO/Scripts/package-sis.sh ../sis/vnes.pkg
+
+          ## Using it
+
+          Put `.nes` files on the memory card (`E:\ROMs\` is opened first). Landscape only.
+          Touch: on-screen D-pad, A, B, Select, Start; `Menu` (top right) gives Resume / Load ROM / Reset / Scale / Sound / Exit.
+          Keys: arrows, `X`=A, `Z`=B, Enter=Start, Space=Select, left soft key=menu.
+          Battery saves are written next to the ROM as `.sav`.
+          Touch input is single-touch (no simultaneous D-pad + button on one finger).
+
+          ## Supported mappers
+
+          0 NROM, 1 MMC1, 2 UxROM, 3 CNROM, 4 MMC3, 7 AxROM, 9 MMC2, 10 MMC4, 11 Color Dreams, 33 Taito TC0190,
+          34 BNROM/NINA-001, 66 GxROM, 71 Camerica, 75 VRC1, 79, 87, 94, 140, 180. NTSC timing only.
+
+          ## Status / honesty notes
+
+          * The core is a rewrite in C++ following vNES's structure, not a line-by-line translation; the extra vNES mappers
+            (VRC2/4, 15, 18, 64, 68, 72, 78, 105, 182) are not ported yet.
+          * Verified on a desktop: nestest trace (8991 lines, instruction + cycle exact), blargg instruction tests,
+            sprite-hit tests. Cycle-exact PPU/APU/MMC3 timing tests fail (scanline-granular PPU) and unofficial opcodes
+            such as ARR/AXS are NOPs.
+          * The Symbian layer (`app/`) was written without access to the SDK and has not been compiled or run on a
+            device; expect small API/include fixes on the first CI run.
+          VNES_EOF
+          mkdir -p symbian/app/data
+          cat > symbian/app/data/vnes.rss <<'VNES_EOF'
+          NAME VNES
+
+          #include <eikon.rh>
+          #include <avkon.rh>
+          #include <avkon.rsg>
+          #include <appinfo.rh>
+
+          RESOURCE RSS_SIGNATURE { }
+
+          RESOURCE TBUF r_default_document_name { buf = ""; }
+
+          RESOURCE EIK_APP_INFO
+              {
+              }
+
+          RESOURCE LOCALISABLE_APP_INFO r_localisable_app_info
+              {
+              short_caption = "vNES";
+              caption_and_icon = CAPTION_AND_ICON_INFO
+                  {
+                  caption = "vNES";
+                  number_of_icons = 0;
+                  };
+              }
+          VNES_EOF
+          mkdir -p symbian/app/data
+          cat > symbian/app/data/vnes_reg.rss <<'VNES_EOF'
+          #include <appinfo.rh>
+          #include <vnes.rsg>
+
+          UID2 KUidAppRegistrationResourceFile
+          UID3 0xE1A5B0CD
+
+          RESOURCE APP_REGISTRATION_INFO
+              {
+              app_file = "vnes";
+              localisable_resource_file = "\\resource\\apps\\vnes";
+              localisable_resource_id = R_LOCALISABLE_APP_INFO;
+              embeddability = KAppNotEmbeddable;
+              newfile = KAppDoesNotSupportNewFile;
+              }
+          VNES_EOF
+          mkdir -p symbian/app/group
+          cat > symbian/app/group/bld.inf <<'VNES_EOF'
+          PRJ_PLATFORMS
+          DEFAULT
+
+          PRJ_MMPFILES
+          vnes.mmp
+          VNES_EOF
+          mkdir -p symbian/app/group
+          cat > symbian/app/group/vnes.mmp <<'VNES_EOF'
+          // vNES for Symbian^3 - native port of the vNES NES emulator.
+          #include <platform_paths.hrh>
+
+          TARGET          vnes.exe
+          TARGETTYPE      exe
+          UID             0x100039CE 0xE1A5B0CD
+          SECUREID        0xE1A5B0CD
+          VENDORID        0
+          CAPABILITY      NONE
+
+          EPOCSTACKSIZE   0x14000
+          EPOCHEAPSIZE    0x100000 0x4000000
+
+          SOURCEPATH      ../src
+          SOURCE          vnes_app.cpp
+          SOURCE          vnes_appui.cpp
+          SOURCE          vnes_container.cpp
+          SOURCE          vnes_audio.cpp
+          SOURCE          nes_platform.cpp
+
+          SOURCEPATH      ../../core
+          SOURCE          nes.cpp
+          SOURCE          nes_cpu.cpp
+          SOURCE          nes_ppu.cpp
+          SOURCE          nes_apu.cpp
+          SOURCE          nes_mapper.cpp
+
+          USERINCLUDE     ../inc
+          USERINCLUDE     ../../core
+          APP_LAYER_SYSTEMINCLUDE
+
+          START RESOURCE  ../data/vnes.rss
+          HEADER
+          TARGETPATH      /resource/apps
+          END
+
+          START RESOURCE  ../data/vnes_reg.rss
+          TARGETPATH      /private/10003a3f/import/apps
+          END
+
+          LIBRARY         euser.lib apparc.lib cone.lib eikcore.lib avkon.lib eikcoctl.lib
+          LIBRARY         fbscli.lib bitgdi.lib gdi.lib ws32.lib efsrv.lib
+          LIBRARY         mediaclientaudiostream.lib
+
+          OPTION          GCCE -O3
+          VNES_EOF
+          mkdir -p symbian/app/inc
+          cat > symbian/app/inc/vnes.h <<'VNES_EOF'
+          // vnes.h - Symbian^3 front end for the vNES core.
+          #ifndef VNES_H
+          #define VNES_H
+
+          #include <aknapp.h>
+          #include <akndoc.h>
+          #include <aknappui.h>
+          #include <coecntrl.h>
+          #include <e32base.h>
+          #include <f32file.h>
+          #include <fbs.h>
+          #include <badesca.h>
+          #include <MdaAudioOutputStream.h>
+          #include "nes.h"
+
+          const TUid KUidVNes = { 0xE1A5B0CD };
+
+          // ---------------------------------------------------------------------------
+          // Audio: pushes 22.05 kHz mono PCM16 produced by the core to the MMF stream.
+          // ---------------------------------------------------------------------------
+          class CVNesAudio : public CBase, public MMdaAudioOutputStreamCallback
+              {
+          public:
+              static CVNesAudio* NewL();
+              ~CVNesAudio();
+              void Write(const TInt16* aSamples, TInt aCount);   // drops data when the queue is full
+              void Suspend();
+              void Resume();
+
+              // MMdaAudioOutputStreamCallback
+              void MaoscOpenComplete(TInt aError);
+              void MaoscBufferCopied(TInt aError, const TDesC8& aBuffer);
+              void MaoscPlayComplete(TInt aError);
+
+          private:
+              CVNesAudio();
+              void ConstructL();
+              void OpenStream();
+
+              enum { KSlots = 4, KSlotBytes = 1600 };
+              CMdaAudioOutputStream* iStream;
+              TMdaAudioDataSettings iSettings;
+              TBool iReady;
+              TBool iSuspended;
+              TBuf8<KSlotBytes> iSlot[KSlots];
+              TBool iBusy[KSlots];
+              };
+
+          // ---------------------------------------------------------------------------
+          // Main control: ROM browser, game view, touch pad and overlay menu.
+          // ---------------------------------------------------------------------------
+          class CVNesContainer : public CCoeControl
+              {
+          public:
+              static CVNesContainer* NewL(const TRect& aRect);
+              ~CVNesContainer();
+              void SetForeground(TBool aForeground);
+              void SaveBattery();
+
+              // CCoeControl
+              void Draw(const TRect& aRect) const;
+              void SizeChanged();
+              void HandlePointerEventL(const TPointerEvent& aEvent);
+              TKeyResponse OfferKeyEventL(const TKeyEvent& aKeyEvent, TEventCode aType);
+
+          private:
+              enum TMode { EBrowse, EPlay, EMenu };
+              enum { KMenuItems = 6 };
+
+              CVNesContainer();
+              void ConstructL(const TRect& aRect);
+
+              static TInt TickCb(TAny* aPtr);
+              void Tick();
+              void StartTimer();
+              void StopTimer();
+
+              void LoadRomL(const TDesC& aPath);
+              void ShowDirL(const TDesC& aDir);
+              void ShowDrivesL();
+              void ActivateEntryL(TInt aIndex);
+              void GoUpL();
+              void MenuActionL(TInt aIndex);
+              void ComputeLayout();
+              TUint8 PadFromPoint(const TPoint& aPt) const;
+              void SetMessage(const TDesC& aMsg);
+              TInt RowHeight() const;
+              void DrawBrowser(CWindowGc& aGc) const;
+              void DrawMenu(CWindowGc& aGc) const;
+              void DrawPad(CWindowGc& aGc) const;
+              void DrawButton(CWindowGc& aGc, const TRect& aRect, const TDesC& aLabel, TBool aDown) const;
+              TRect GameRect() const;
+
+              nes::Nes* iNes;
+              CFbsBitmap* iBitmap;
+              CPeriodic* iTimer;
+              CVNesAudio* iAudio;
+              RFs iFs;
+
+              TMode iMode;
+              TBool iHaveRom;
+              TBool iFit;
+              TBool iSound;
+              TBool iForeground;
+              TUint iLastTick;
+
+              TFileName iDir;
+              TFileName iRomPath;
+              CDesCArrayFlat* iEntries;
+              TInt iSel;
+              TInt iScroll;
+              TInt iDragStartY;
+              TInt iDragScroll;
+              TBool iDragging;
+              TBuf<80> iMessage;
+
+              TUint8 iKeyPad;
+              TUint8 iTouchPad;
+
+              // layout
+              TPoint iDpadCentre;
+              TInt iDpadR;
+              TRect iBtnA, iBtnB, iBtnSelect, iBtnStart, iBtnMenu;
+              TInt iMenuSel;
+              };
+
+          // ---------------------------------------------------------------------------
+          class CVNesAppUi : public CAknAppUi
+              {
+          public:
+              void ConstructL();
+              ~CVNesAppUi();
+              void HandleCommandL(TInt aCommand);
+              void HandleForegroundEventL(TBool aForeground);
+              void HandleResourceChangeL(TInt aType);
+          private:
+              CVNesContainer* iContainer;
+              };
+
+          class CVNesDocument : public CAknDocument
+              {
+          public:
+              CVNesDocument(CEikApplication& aApp) : CAknDocument(aApp) {}
+          private:
+              CEikAppUi* CreateAppUiL();
+              };
+
+          class CVNesApplication : public CAknApplication
+              {
+          private:
+              CApaDocument* CreateDocumentL();
+              TUid AppDllUid() const;
+              };
+
+          #endif
+          VNES_EOF
+          mkdir -p symbian/app/sis
+          cat > symbian/app/sis/vnes.pkg <<'VNES_EOF'
+          ; vNES for Symbian^3 - install package (paths are expanded by package-sis.sh)
+          &EN
+          #{"vNES"},(0xE1A5B0CD),1,0,0
+
+          %{"Open Emulation Project / Symbian port"}
+          :"Symbian port"
+
+          ; Symbian^3 / S60 5th / S60 3rd platform IDs
+          [0x20022E6D], 0, 0, 0, {"S60ProductID"}
+          [0x1028315F], 0, 0, 0, {"S60ProductID"}
+          [0x102752AE], 0, 0, 0, {"S60ProductID"}
+          [0x102032BE], 0, 0, 0, {"S60ProductID"}
+          [0x101F7961], 0, 0, 0, {"S60ProductID"}
+
+          "$(epocroot)epoc32/release/$(platform)/$(target)/vnes.exe"-"!:\sys\bin\vnes.exe"
+          "$(epocroot)epoc32/data/z/resource/apps/vnes.rsc"-"!:\resource\apps\vnes.rsc"
+          "$(epocroot)epoc32/data/z/private/10003a3f/import/apps/vnes_reg.rsc"-"!:\private\10003a3f\import\apps\vnes_reg.rsc"
+          VNES_EOF
+          mkdir -p symbian/app/src
+          cat > symbian/app/src/nes_platform.cpp <<'VNES_EOF'
+          // Allocator hooks for the portable core.
+          #include <e32std.h>
+          #include "nes.h"
+
+          namespace nes {
+
+          void* PlatAlloc(u32 aSize)
+              {
+              return User::AllocZ(aSize ? aSize : 1);
+              }
+
+          void PlatFree(void* aPtr)
+              {
+              User::Free(aPtr);
+              }
+
+          }  // namespace nes
+          VNES_EOF
+          mkdir -p symbian/app/src
+          cat > symbian/app/src/vnes_app.cpp <<'VNES_EOF'
+          // Application / document / entry point.
+          #include <eikstart.h>
+          #include "vnes.h"
+
+          CApaDocument* CVNesApplication::CreateDocumentL()
+              {
+              return new (ELeave) CVNesDocument(*this);
+              }
+
+          TUid CVNesApplication::AppDllUid() const
+              {
+              return KUidVNes;
+              }
+
+          CEikAppUi* CVNesDocument::CreateAppUiL()
+              {
+              return new (ELeave) CVNesAppUi;
+              }
+
+          LOCAL_C CApaApplication* NewApplication()
+              {
+              return new CVNesApplication;
+              }
+
+          GLDEF_C TInt E32Main()
+              {
+              return EikStart::RunApplication(NewApplication);
+              }
+          VNES_EOF
+          mkdir -p symbian/app/src
+          cat > symbian/app/src/vnes_appui.cpp <<'VNES_EOF'
+          // AppUi: owns the full-screen container.
+          #include <avkon.hrh>
+          #include <eikon.hrh>
+          #include <eikenv.h>
+          #include <eikspane.h>
+          #include <eikbtgpc.h>
+          #include "vnes.h"
+
+          void CVNesAppUi::ConstructL()
+              {
+              BaseConstructL(CAknAppUi::EAknEnableSkin);
+              SetOrientationL(CAknAppUiBase::EAppUiOrientationLandscape);
+
+              CEikStatusPane* sp = StatusPane();
+              if (sp)
+                  {
+                  sp->MakeVisible(EFalse);
+                  }
+              CEikButtonGroupContainer* cba = Cba();
+              if (cba)
+                  {
+                  cba->MakeVisible(EFalse);
+                  }
+
+              iContainer = CVNesContainer::NewL(ApplicationRect());
+              AddToStackL(iContainer);
+              }
+
+          CVNesAppUi::~CVNesAppUi()
+              {
+              if (iContainer)
+                  {
+                  iContainer->SaveBattery();
+                  RemoveFromStack(iContainer);
+                  delete iContainer;
+                  iContainer = NULL;
+                  }
+              }
+
+          void CVNesAppUi::HandleCommandL(TInt aCommand)
+              {
+              switch (aCommand)
+                  {
+                  case EEikCmdExit:
+                  case EAknSoftkeyExit:
+                  case EAknCmdExit:
+                      Exit();
+                      break;
+                  default:
+                      break;
+                  }
+              }
+
+          void CVNesAppUi::HandleForegroundEventL(TBool aForeground)
+              {
+              CAknAppUi::HandleForegroundEventL(aForeground);
+              if (iContainer)
+                  {
+                  iContainer->SetForeground(aForeground);
+                  }
+              }
+
+          void CVNesAppUi::HandleResourceChangeL(TInt aType)
+              {
+              CAknAppUi::HandleResourceChangeL(aType);
+              if (iContainer && aType == KEikDynamicLayoutVariantSwitch)
+                  {
+                  iContainer->SetRect(ApplicationRect());
+                  }
+              }
+          VNES_EOF
+          mkdir -p symbian/app/src
+          cat > symbian/app/src/vnes_audio.cpp <<'VNES_EOF'
+          // Audio output through CMdaAudioOutputStream (22.05 kHz, mono, PCM16).
+          #include "vnes.h"
+
+          CVNesAudio* CVNesAudio::NewL()
+              {
+              CVNesAudio* self = new (ELeave) CVNesAudio;
+              CleanupStack::PushL(self);
+              self->ConstructL();
+              CleanupStack::Pop(self);
+              return self;
+              }
+
+          CVNesAudio::CVNesAudio()
+              {
+              }
+
+          CVNesAudio::~CVNesAudio()
+              {
+              if (iStream)
+                  {
+                  iStream->Stop();
+                  delete iStream;
+                  }
+              }
+
+          void CVNesAudio::ConstructL()
+              {
+              for (TInt i = 0; i < KSlots; ++i)
+                  {
+                  iBusy[i] = EFalse;
+                  }
+              OpenStream();
+              }
+
+          void CVNesAudio::OpenStream()
+              {
+              iReady = EFalse;
+              delete iStream;
+              iStream = NULL;
+              TRAPD(err, iStream = CMdaAudioOutputStream::NewL(*this));
+              if (err == KErrNone && iStream)
+                  {
+                  iStream->Open(&iSettings);
+                  }
+              }
+
+          void CVNesAudio::MaoscOpenComplete(TInt aError)
+              {
+              if (aError != KErrNone)
+                  {
+                  return;
+                  }
+              TRAPD(err, iStream->SetAudioPropertiesL(TMdaAudioDataSettings::ESampleRate22050Hz,
+                                                      TMdaAudioDataSettings::EChannelsMono));
+              if (err != KErrNone)
+                  {
+                  return;
+                  }
+              iStream->SetVolume(iStream->MaxVolume() / 2);
+              iStream->SetPriority(EPriorityNormal, EMdaPriorityPreferenceTime);
+              iReady = ETrue;
+              }
+
+          void CVNesAudio::MaoscBufferCopied(TInt /*aError*/, const TDesC8& aBuffer)
+              {
+              for (TInt i = 0; i < KSlots; ++i)
+                  {
+                  if (iSlot[i].Ptr() == aBuffer.Ptr())
+                      {
+                      iBusy[i] = EFalse;
+                      }
+                  }
+              }
+
+          void CVNesAudio::MaoscPlayComplete(TInt /*aError*/)
+              {
+              for (TInt i = 0; i < KSlots; ++i)
+                  {
+                  iBusy[i] = EFalse;
+                  }
+              }
+
+          void CVNesAudio::Write(const TInt16* aSamples, TInt aCount)
+              {
+              if (!iReady || iSuspended || aCount <= 0)
+                  {
+                  return;
+                  }
+              TInt bytes = aCount * 2;
+              if (bytes > KSlotBytes)
+                  {
+                  bytes = KSlotBytes;
+                  }
+              for (TInt i = 0; i < KSlots; ++i)
+                  {
+                  if (!iBusy[i])
+                      {
+                      iSlot[i].Copy((const TUint8*)aSamples, bytes);
+                      iBusy[i] = ETrue;
+                      TRAPD(err, iStream->WriteL(iSlot[i]));
+                      if (err != KErrNone)
+                          {
+                          iBusy[i] = EFalse;
+                          }
+                      return;
+                      }
+                  }
+              // all slots in flight: drop this frame's audio to keep latency bounded
+              }
+
+          void CVNesAudio::Suspend()
+              {
+              iSuspended = ETrue;
+              if (iStream && iReady)
+                  {
+                  iStream->Stop();
+                  iReady = EFalse;
+                  }
+              }
+
+          void CVNesAudio::Resume()
+              {
+              if (iSuspended)
+                  {
+                  iSuspended = EFalse;
+                  OpenStream();
+                  }
+              }
+          VNES_EOF
+          mkdir -p symbian/app/src
+          cat > symbian/app/src/vnes_container.cpp <<'VNES_EOF'
+          // Main control: ROM browser, game view, touch pad, overlay menu.
+          #include <aknutils.h>
+          #include <avkon.hrh>
+          #include <eikon.hrh>
+          #include <eikenv.h>
+          #include <w32std.h>
+          #include "vnes.h"
+
+          _LIT(KRoms1, "E:\\ROMs\\");
+          _LIT(KRoms2, "E:\\roms\\");
+          _LIT(KRoms3, "E:\\");
+          _LIT(KRoms4, "C:\\Data\\");
+          _LIT(KExtNes, ".nes");
+          _LIT(KExtSav, ".sav");
+          _LIT(KUp, "..");
+
+          static const TInt KFrameMicros = 16667;
+
+          static const TInt KMenuCount = 6;
+
+          CVNesContainer* CVNesContainer::NewL(const TRect& aRect)
+              {
+              CVNesContainer* self = new (ELeave) CVNesContainer;
+              CleanupStack::PushL(self);
+              self->ConstructL(aRect);
+              CleanupStack::Pop(self);
+              return self;
+              }
+
+          CVNesContainer::CVNesContainer()
+              {
+              }
+
+          CVNesContainer::~CVNesContainer()
+              {
+              StopTimer();
+              delete iTimer;
+              delete iAudio;
+              delete iBitmap;
+              delete iEntries;
+              delete iNes;
+              iFs.Close();
+              }
+
+          void CVNesContainer::ConstructL(const TRect& aRect)
+              {
+              CreateWindowL();
+              SetExtentToWholeScreen();
+              EnableDragEvents();
+              SetFocusing(ETrue);
+
+              User::LeaveIfError(iFs.Connect());
+
+              iNes = new (ELeave) nes::Nes;
+              if (!iNes->Init())
+                  {
+                  User::Leave(KErrNoMemory);
+                  }
+              iBitmap = new (ELeave) CFbsBitmap;
+              User::LeaveIfError(iBitmap->Create(TSize(nes::kScreenW, nes::kScreenH), EColor16MU));
+              iEntries = new (ELeave) CDesCArrayFlat(16);
+              TRAPD(aerr, iAudio = CVNesAudio::NewL());
+              if (aerr != KErrNone)
+                  {
+                  iAudio = NULL;      // run silently when the audio stream is unavailable
+                  }
+
+              iMode = EBrowse;
+              iSound = ETrue;
+              iForeground = ETrue;
+              iFit = EFalse;
+              iSel = 0;
+              iMenuSel = 0;
+
+              // pick the first ROM folder that exists
+              TBool shown = EFalse;
+              const TDesC* roots[4] = { &KRoms1, &KRoms2, &KRoms3, &KRoms4 };
+              for (TInt i = 0; i < 4 && !shown; ++i)
+                  {
+                  TRAPD(err, ShowDirL(*roots[i]));
+                  shown = (err == KErrNone);
+                  }
+              if (!shown)
+                  {
+                  ShowDrivesL();
+                  }
+
+              SetRect(aRect);
+              ActivateL();
+
+              iTimer = CPeriodic::NewL(CActive::EPriorityStandard);
+              }
+
+          void CVNesContainer::StartTimer()
+              {
+              if (iTimer && !iTimer->IsActive())
+                  {
+                  iLastTick = User::NTickCount();
+                  iTimer->Start(KFrameMicros, KFrameMicros, TCallBack(TickCb, this));
+                  }
+              }
+
+          void CVNesContainer::StopTimer()
+              {
+              if (iTimer)
+                  {
+                  iTimer->Cancel();
+                  }
+              }
+
+          void CVNesContainer::SetForeground(TBool aForeground)
+              {
+              iForeground = aForeground;
+              if (!aForeground)
+                  {
+                  StopTimer();
+                  SaveBattery();
+                  if (iAudio)
+                      {
+                      iAudio->Suspend();
+                      }
+                  }
+              else
+                  {
+                  if (iAudio && iSound)
+                      {
+                      iAudio->Resume();
+                      }
+                  if (iMode == EPlay)
+                      {
+                      StartTimer();
+                      }
+                  }
+              }
+
+          void CVNesContainer::SetMessage(const TDesC& aMsg)
+              {
+              iMessage.Copy(aMsg.Left(iMessage.MaxLength()));
+              }
+
+          // ---------------------------------------------------------------------------
+          // Emulation tick
+          // ---------------------------------------------------------------------------
+          TInt CVNesContainer::TickCb(TAny* aPtr)
+              {
+              static_cast<CVNesContainer*>(aPtr)->Tick();
+              return 0;
+              }
+
+          void CVNesContainer::Tick()
+              {
+              if (iMode != EPlay || !iHaveRom || !iForeground)
+                  {
+                  return;
+                  }
+              TUint now = User::NTickCount();
+              TUint elapsed = now - iLastTick;
+              iLastTick = now;
+              TInt frames = (TInt)((elapsed * 60 + 500) / 1000);
+              if (frames < 1) frames = 1;
+              if (frames > 3) frames = 3;
+
+              iNes->SetPad(0, (nes::u8)(iKeyPad | iTouchPad));
+              for (TInt i = 0; i < frames; ++i)
+                  {
+                  iNes->RunFrame(i == frames - 1);
+                  }
+
+              if (iAudio && iSound)
+                  {
+                  nes::s16 buf[nes::kAudioRing];
+                  TInt n = iNes->ReadAudio(buf, nes::kAudioRing);
+                  iAudio->Write((const TInt16*)buf, n);
+                  }
+              else
+                  {
+                  nes::s16 buf[nes::kAudioRing];
+                  iNes->ReadAudio(buf, nes::kAudioRing);
+                  }
+
+              iBitmap->LockHeap();
+              TUint32* dst = (TUint32*)iBitmap->DataAddress();
+              const TUint32* src = (const TUint32*)iNes->FrameBuffer();
+              TInt stride = iBitmap->DataStride();
+              if (stride == nes::kScreenW * 4)
+                  {
+                  Mem::Copy(dst, src, nes::kScreenW * nes::kScreenH * 4);
+                  }
+              else
+                  {
+                  for (TInt y = 0; y < nes::kScreenH; ++y)
+                      {
+                      Mem::Copy(((TUint8*)dst) + y * stride, src + y * nes::kScreenW, nes::kScreenW * 4);
+                      }
+                  }
+              iBitmap->UnlockHeap();
+              DrawNow();
+              }
+
+          // ---------------------------------------------------------------------------
+          // ROM and file handling
+          // ---------------------------------------------------------------------------
+          void CVNesContainer::SaveBattery()
+              {
+              if (!iHaveRom || !iNes->HasBattery() || iRomPath.Length() == 0)
+                  {
+                  return;
+                  }
+              TInt dot = iRomPath.LocateReverse('.');
+              TFileName sav = (dot > 0) ? iRomPath.Left(dot) : iRomPath;
+              sav.Append(KExtSav);
+              RFile f;
+              if (f.Replace(iFs, sav, EFileWrite) == KErrNone)
+                  {
+                  TPtrC8 data(iNes->SaveRam(), (TInt)iNes->SaveRamSize());
+                  f.Write(data);
+                  f.Close();
+                  }
+              }
+
+          void CVNesContainer::LoadRomL(const TDesC& aPath)
+              {
+              SaveBattery();
+              iHaveRom = EFalse;
+              StopTimer();
+
+              RFile f;
+              User::LeaveIfError(f.Open(iFs, aPath, EFileRead | EFileShareReadersOnly));
+              CleanupClosePushL(f);
+              TInt size = 0;
+              User::LeaveIfError(f.Size(size));
+              HBufC8* buf = HBufC8::NewLC(size);
+              TPtr8 p = buf->Des();
+              User::LeaveIfError(f.Read(p));
+
+              TBool ok = iNes->LoadRom((const nes::u8*)buf->Ptr(), (TUint)buf->Length());
+              CleanupStack::PopAndDestroy(2);     // buf, f
+
+              if (!ok)
+                  {
+                  TPtrC8 err((const TUint8*)iNes->LastError());
+                  iMessage.Copy(err.Left(iMessage.MaxLength()));
+                  return;
+                  }
+              iRomPath = aPath;
+              iHaveRom = ETrue;
+              iMessage.Zero();
+
+              if (iNes->HasBattery())
+                  {
+                  TInt dot = iRomPath.LocateReverse('.');
+                  TFileName sav = (dot > 0) ? iRomPath.Left(dot) : iRomPath;
+                  sav.Append(KExtSav);
+                  RFile sf;
+                  if (sf.Open(iFs, sav, EFileRead | EFileShareReadersOnly) == KErrNone)
+                      {
+                      TPtr8 sp(iNes->SaveRam(), 0, (TInt)iNes->SaveRamSize());
+                      sf.Read(sp);
+                      sf.Close();
+                      }
+                  }
+              iKeyPad = 0;
+              iTouchPad = 0;
+              iMode = EPlay;
+              if (iAudio && iSound)
+                  {
+                  iAudio->Resume();
+                  }
+              StartTimer();
+              }
+
+          void CVNesContainer::ShowDrivesL()
+              {
+              iEntries->Reset();
+              iDir.Zero();
+              TDriveList list;
+              User::LeaveIfError(iFs.DriveList(list));
+              for (TInt d = 0; d < KMaxDrives; ++d)
+                  {
+                  if (list[d])
+                      {
+                      TChar ch;
+                      User::LeaveIfError(iFs.DriveToChar(d, ch));
+                      TBuf<4> n;
+                      n.Append(ch);
+                      n.Append(_L(":\\"));
+                      iEntries->AppendL(n);
+                      }
+                  }
+              iSel = 0;
+              iScroll = 0;
+              }
+
+          void CVNesContainer::ShowDirL(const TDesC& aDir)
+              {
+              CDir* list = NULL;
+              User::LeaveIfError(iFs.GetDir(aDir, KEntryAttNormal | KEntryAttDir, ESortByName | EDirsFirst, list));
+              CleanupStack::PushL(list);
+              iEntries->Reset();
+              iEntries->AppendL(KUp);
+              for (TInt i = 0; i < list->Count(); ++i)
+                  {
+                  const TEntry& e = (*list)[i];
+                  if (e.IsDir())
+                      {
+                      TFileName n = e.iName;
+                      n.Append('\\');
+                      iEntries->AppendL(n);
+                      }
+                  else if (e.iName.Length() > 4 && e.iName.Right(4).CompareF(KExtNes) == 0)
+                      {
+                      iEntries->AppendL(e.iName);
+                      }
+                  }
+              CleanupStack::PopAndDestroy(list);
+              iDir = aDir;
+              iSel = 0;
+              iScroll = 0;
+              }
+
+          void CVNesContainer::GoUpL()
+              {
+              TInt len = iDir.Length();
+              if (len <= 3)
+                  {
+                  ShowDrivesL();
+                  return;
+                  }
+              TFileName t = iDir.Left(len - 1);       // drop trailing '\'
+              TInt pos = t.LocateReverse('\\');
+              if (pos < 0)
+                  {
+                  ShowDrivesL();
+                  return;
+                  }
+              TFileName parent = t.Left(pos + 1);
+              ShowDirL(parent);
+              }
+
+          void CVNesContainer::ActivateEntryL(TInt aIndex)
+              {
+              if (aIndex < 0 || aIndex >= iEntries->Count())
+                  {
+                  return;
+                  }
+              TPtrC name = (*iEntries)[aIndex];
+              if (iDir.Length() == 0)
+                  {
+                  TFileName d = name;                 // drive root
+                  ShowDirL(d);
+                  return;
+                  }
+              if (name.Compare(KUp) == 0)
+                  {
+                  GoUpL();
+                  return;
+                  }
+              TFileName full = iDir;
+              full.Append(name);
+              if (name.Length() > 0 && name[name.Length() - 1] == '\\')
+                  {
+                  TRAPD(err, ShowDirL(full));
+                  if (err != KErrNone)
+                      {
+                      SetMessage(_L("Cannot open folder"));
+                      }
+                  return;
+                  }
+              TRAPD(err, LoadRomL(full));
+              if (err != KErrNone)
+                  {
+                  SetMessage(_L("Cannot read file"));
+                  }
+              }
+
+          void CVNesContainer::MenuActionL(TInt aIndex)
+              {
+              switch (aIndex)
+                  {
+                  case 0:     // resume
+                      if (iHaveRom)
+                          {
+                          iMode = EPlay;
+                          StartTimer();
+                          }
+                      break;
+                  case 1:     // load ROM
+                      SaveBattery();
+                      iMode = EBrowse;
+                      break;
+                  case 2:     // reset
+                      if (iHaveRom)
+                          {
+                          iNes->Reset();
+                          iMode = EPlay;
+                          StartTimer();
+                          }
+                      break;
+                  case 3:     // scaling
+                      iFit = !iFit;
+                      break;
+                  case 4:     // sound
+                      iSound = !iSound;
+                      if (iAudio)
+                          {
+                          if (iSound) iAudio->Resume(); else iAudio->Suspend();
+                          }
+                      break;
+                  default:    // exit
+                      iEikonEnv->EikAppUi()->HandleCommandL(EEikCmdExit);
+                      break;
+                  }
+              DrawNow();
+              }
+
+          // ---------------------------------------------------------------------------
+          // Layout and drawing
+          // ---------------------------------------------------------------------------
+          void CVNesContainer::SizeChanged()
+              {
+              ComputeLayout();
+              }
+
+          void CVNesContainer::ComputeLayout()
+              {
+              TRect r = Rect();
+              TInt w = r.Width(), h = r.Height();
+              TInt R = Min(h / 4, w / 6);
+              if (R < 30) R = 30;
+              iDpadR = R;
+              iDpadCentre = TPoint(R + 12, h - R - 12);
+              TInt br = R * 2 / 5;
+              TPoint a(w - br - 14, h - R - 12 - br / 2);
+              TPoint b(w - 3 * br - 30, h - R - 12 + br / 2);
+              iBtnA = TRect(a.iX - br, a.iY - br, a.iX + br, a.iY + br);
+              iBtnB = TRect(b.iX - br, b.iY - br, b.iX + br, b.iY + br);
+              TInt sw = 84, sh = 38;
+              iBtnSelect = TRect(w / 2 - sw - 8, h - sh - 8, w / 2 - 8, h - 8);
+              iBtnStart = TRect(w / 2 + 8, h - sh - 8, w / 2 + sw + 8, h - 8);
+              iBtnMenu = TRect(w - 78, 6, w - 6, 44);
+              }
+
+          TRect CVNesContainer::GameRect() const
+              {
+              TRect r = Rect();
+              TInt w = r.Width(), h = r.Height();
+              TInt dw, dh;
+              if (iFit)
+                  {
+                  if (h * nes::kScreenW <= w * nes::kScreenH)
+                      {
+                      dh = h;
+                      dw = h * nes::kScreenW / nes::kScreenH;
+                      }
+                  else
+                      {
+                      dw = w;
+                      dh = w * nes::kScreenH / nes::kScreenW;
+                      }
+                  }
+              else
+                  {
+                  dw = nes::kScreenW;
+                  dh = nes::kScreenH;
+                  }
+              TInt x = (w - dw) / 2;
+              TInt y = (h - dh) / 2;
+              return TRect(x, y, x + dw, y + dh);
+              }
+
+          TInt CVNesContainer::RowHeight() const
+              {
+              return 52;
+              }
+
+          void CVNesContainer::DrawButton(CWindowGc& aGc, const TRect& aRect, const TDesC& aLabel, TBool aDown) const
+              {
+              aGc.SetPenStyle(CGraphicsContext::ESolidPen);
+              aGc.SetPenColor(KRgbGray);
+              if (aDown)
+                  {
+                  aGc.SetBrushStyle(CGraphicsContext::ESolidBrush);
+                  aGc.SetBrushColor(TRgb(70, 70, 110));
+                  }
+              else
+                  {
+                  aGc.SetBrushStyle(CGraphicsContext::ENullBrush);
+                  }
+              aGc.DrawRect(aRect);
+              aGc.SetBrushStyle(CGraphicsContext::ENullBrush);
+              const CFont* font = iEikonEnv->NormalFont();
+              aGc.UseFont(font);
+              aGc.SetPenColor(KRgbWhite);
+              TInt base = (aRect.Height() + font->AscentInPixels() - font->DescentInPixels()) / 2;
+              aGc.DrawText(aLabel, aRect, base, CGraphicsContext::ECenter, 0);
+              aGc.DiscardFont();
+              }
+
+          void CVNesContainer::DrawPad(CWindowGc& aGc) const
+              {
+              TUint8 p = (TUint8)(iKeyPad | iTouchPad);
+              aGc.SetPenStyle(CGraphicsContext::ESolidPen);
+              aGc.SetPenColor(KRgbGray);
+              aGc.SetBrushStyle(CGraphicsContext::ENullBrush);
+              TRect pad(iDpadCentre.iX - iDpadR, iDpadCentre.iY - iDpadR, iDpadCentre.iX + iDpadR, iDpadCentre.iY + iDpadR);
+              aGc.DrawEllipse(pad);
+              TInt q = iDpadR / 3;
+              TRect up(iDpadCentre.iX - q, iDpadCentre.iY - iDpadR, iDpadCentre.iX + q, iDpadCentre.iY - q);
+              TRect dn(iDpadCentre.iX - q, iDpadCentre.iY + q, iDpadCentre.iX + q, iDpadCentre.iY + iDpadR);
+              TRect lf(iDpadCentre.iX - iDpadR, iDpadCentre.iY - q, iDpadCentre.iX - q, iDpadCentre.iY + q);
+              TRect rt(iDpadCentre.iX + q, iDpadCentre.iY - q, iDpadCentre.iX + iDpadR, iDpadCentre.iY + q);
+              aGc.SetBrushStyle(CGraphicsContext::ESolidBrush);
+              aGc.SetBrushColor(TRgb(70, 70, 110));
+              if (p & nes::kPadUp) aGc.DrawRect(up);
+              if (p & nes::kPadDown) aGc.DrawRect(dn);
+              if (p & nes::kPadLeft) aGc.DrawRect(lf);
+              if (p & nes::kPadRight) aGc.DrawRect(rt);
+              aGc.SetBrushStyle(CGraphicsContext::ENullBrush);
+              aGc.DrawLine(TPoint(iDpadCentre.iX - iDpadR, iDpadCentre.iY), TPoint(iDpadCentre.iX + iDpadR, iDpadCentre.iY));
+              aGc.DrawLine(TPoint(iDpadCentre.iX, iDpadCentre.iY - iDpadR), TPoint(iDpadCentre.iX, iDpadCentre.iY + iDpadR));
+              DrawButton(aGc, iBtnA, _L("A"), p & nes::kPadA);
+              DrawButton(aGc, iBtnB, _L("B"), p & nes::kPadB);
+              DrawButton(aGc, iBtnSelect, _L("Select"), p & nes::kPadSelect);
+              DrawButton(aGc, iBtnStart, _L("Start"), p & nes::kPadStart);
+              DrawButton(aGc, iBtnMenu, _L("Menu"), EFalse);
+              }
+
+          void CVNesContainer::DrawBrowser(CWindowGc& aGc) const
+              {
+              TRect r = Rect();
+              const CFont* font = iEikonEnv->NormalFont();
+              aGc.UseFont(font);
+              aGc.SetPenColor(KRgbCyan);
+              TRect head(r.iTl.iX + 8, r.iTl.iY, r.iBr.iX - 8, r.iTl.iY + 40);
+              TPtrC title = iDir.Length() ? TPtrC(iDir) : TPtrC(_L("Select drive"));
+              aGc.DrawText(title, head, 28, CGraphicsContext::ELeft, 0);
+
+              TInt rh = RowHeight();
+              TInt top = 44;
+              TInt rows = (r.Height() - top) / rh;
+              for (TInt i = 0; i < rows + 1; ++i)
+                  {
+                  TInt idx = iScroll + i;
+                  if (idx >= iEntries->Count())
+                      {
+                      break;
+                      }
+                  TRect row(r.iTl.iX, top + i * rh, r.iBr.iX, top + (i + 1) * rh);
+                  if (idx == iSel)
+                      {
+                      aGc.SetBrushStyle(CGraphicsContext::ESolidBrush);
+                      aGc.SetBrushColor(TRgb(40, 60, 110));
+                      aGc.SetPenStyle(CGraphicsContext::ENullPen);
+                      aGc.DrawRect(row);
+                      aGc.SetPenStyle(CGraphicsContext::ESolidPen);
+                      aGc.SetBrushStyle(CGraphicsContext::ENullBrush);
+                      }
+                  TPtrC name = (*iEntries)[idx];
+                  TBool isDir = iDir.Length() == 0 || name.Compare(KUp) == 0 ||
+                                (name.Length() > 0 && name[name.Length() - 1] == '\\');
+                  aGc.SetPenColor(isDir ? TRgb(240, 220, 120) : KRgbWhite);
+                  TRect text(row.iTl.iX + 16, row.iTl.iY, row.iBr.iX - 8, row.iBr.iY);
+                  aGc.DrawText(name, text, rh / 2 + font->AscentInPixels() / 2, CGraphicsContext::ELeft, 0);
+                  }
+              if (iMessage.Length())
+                  {
+                  aGc.SetPenColor(TRgb(255, 120, 120));
+                  TRect m(r.iTl.iX + 8, r.iBr.iY - 36, r.iBr.iX - 8, r.iBr.iY);
+                  aGc.DrawText(iMessage, m, 26, CGraphicsContext::ELeft, 0);
+                  }
+              aGc.DiscardFont();
+              }
+
+          void CVNesContainer::DrawMenu(CWindowGc& aGc) const
+              {
+              TRect r = Rect();
+              TInt w = 320, rh = 46;
+              TInt h = KMenuCount * rh;
+              TRect box((r.Width() - w) / 2, (r.Height() - h) / 2, (r.Width() + w) / 2, (r.Height() + h) / 2);
+              aGc.SetPenStyle(CGraphicsContext::ESolidPen);
+              aGc.SetPenColor(KRgbGray);
+              aGc.SetBrushStyle(CGraphicsContext::ESolidBrush);
+              aGc.SetBrushColor(TRgb(20, 20, 30));
+              aGc.DrawRect(box);
+              const CFont* font = iEikonEnv->NormalFont();
+              aGc.UseFont(font);
+              TBuf<24> label[KMenuCount];
+              label[0] = _L("Resume");
+              label[1] = _L("Load ROM");
+              label[2] = _L("Reset");
+              label[3] = iFit ? _L("Scale: fit screen") : _L("Scale: 1:1");
+              label[4] = iSound ? _L("Sound: on") : _L("Sound: off");
+              label[5] = _L("Exit");
+              for (TInt i = 0; i < KMenuCount; ++i)
+                  {
+                  TRect row(box.iTl.iX, box.iTl.iY + i * rh, box.iBr.iX, box.iTl.iY + (i + 1) * rh);
+                  if (i == iMenuSel)
+                      {
+                      aGc.SetBrushColor(TRgb(40, 60, 110));
+                      aGc.SetPenStyle(CGraphicsContext::ENullPen);
+                      aGc.DrawRect(row);
+                      aGc.SetPenStyle(CGraphicsContext::ESolidPen);
+                      }
+                  aGc.SetBrushStyle(CGraphicsContext::ENullBrush);
+                  aGc.SetPenColor(KRgbWhite);
+                  TRect text(row.iTl.iX + 16, row.iTl.iY, row.iBr.iX, row.iBr.iY);
+                  aGc.DrawText(label[i], text, rh / 2 + font->AscentInPixels() / 2, CGraphicsContext::ELeft, 0);
+                  aGc.SetBrushStyle(CGraphicsContext::ESolidBrush);
+                  }
+              aGc.SetBrushStyle(CGraphicsContext::ENullBrush);
+              aGc.DiscardFont();
+              }
+
+          void CVNesContainer::Draw(const TRect& /*aRect*/) const
+              {
+              CWindowGc& gc = SystemGc();
+              gc.SetPenStyle(CGraphicsContext::ESolidPen);
+              gc.SetBrushStyle(CGraphicsContext::ESolidBrush);
+              gc.SetBrushColor(KRgbBlack);
+              gc.Clear(Rect());
+              gc.SetBrushStyle(CGraphicsContext::ENullBrush);
+
+              if (iMode == EBrowse)
+                  {
+                  DrawBrowser(gc);
+                  return;
+                  }
+              if (iHaveRom)
+                  {
+                  TRect g = GameRect();
+                  if (g.Width() == nes::kScreenW)
+                      {
+                      gc.BitBlt(g.iTl, iBitmap);
+                      }
+                  else
+                      {
+                      gc.DrawBitmap(g, iBitmap);
+                      }
+                  }
+              DrawPad(gc);
+              if (iMode == EMenu)
+                  {
+                  DrawMenu(gc);
+                  }
+              }
+
+          // ---------------------------------------------------------------------------
+          // Input
+          // ---------------------------------------------------------------------------
+          TUint8 CVNesContainer::PadFromPoint(const TPoint& aPt) const
+              {
+              TUint8 bits = 0;
+              if (iBtnA.Contains(aPt)) bits |= nes::kPadA;
+              if (iBtnB.Contains(aPt)) bits |= nes::kPadB;
+              if (iBtnSelect.Contains(aPt)) bits |= nes::kPadSelect;
+              if (iBtnStart.Contains(aPt)) bits |= nes::kPadStart;
+              TInt dx = aPt.iX - iDpadCentre.iX;
+              TInt dy = aPt.iY - iDpadCentre.iY;
+              TInt lim = iDpadR + iDpadR / 3;
+              if (dx > -lim && dx < lim && dy > -lim && dy < lim)
+                  {
+                  TInt dead = iDpadR / 4;
+                  if (dx < -dead) bits |= nes::kPadLeft;
+                  if (dx > dead) bits |= nes::kPadRight;
+                  if (dy < -dead) bits |= nes::kPadUp;
+                  if (dy > dead) bits |= nes::kPadDown;
+                  }
+              return bits;
+              }
+
+          void CVNesContainer::HandlePointerEventL(const TPointerEvent& aEvent)
+              {
+              const TPoint pt = aEvent.iPosition;
+
+              if (iMode == EPlay)
+                  {
+                  if (aEvent.iType == TPointerEvent::EButton1Down && iBtnMenu.Contains(pt))
+                      {
+                      iTouchPad = 0;
+                      iMode = EMenu;
+                      iMenuSel = 0;
+                      StopTimer();
+                      SaveBattery();
+                      DrawNow();
+                      return;
+                      }
+                  if (aEvent.iType == TPointerEvent::EButton1Down || aEvent.iType == TPointerEvent::EDrag)
+                      {
+                      iTouchPad = PadFromPoint(pt);
+                      }
+                  else if (aEvent.iType == TPointerEvent::EButton1Up)
+                      {
+                      iTouchPad = 0;
+                      }
+                  return;
+                  }
+
+              if (iMode == EMenu)
+                  {
+                  if (aEvent.iType == TPointerEvent::EButton1Up)
+                      {
+                      TRect r = Rect();
+                      TInt w = 320, rh = 46, h = KMenuCount * rh;
+                      TRect box((r.Width() - w) / 2, (r.Height() - h) / 2, (r.Width() + w) / 2, (r.Height() + h) / 2);
+                      if (box.Contains(pt))
+                          {
+                          MenuActionL((pt.iY - box.iTl.iY) / rh);
+                          }
+                      else
+                          {
+                          MenuActionL(0);
+                          }
+                      }
+                  return;
+                  }
+
+              // browser
+              TInt rh = RowHeight();
+              switch (aEvent.iType)
+                  {
+                  case TPointerEvent::EButton1Down:
+                      iDragging = EFalse;
+                      iDragStartY = pt.iY;
+                      iDragScroll = iScroll;
+                      break;
+                  case TPointerEvent::EDrag:
+                      {
+                      TInt dy = iDragStartY - pt.iY;
+                      if (dy > 12 || dy < -12)
+                          {
+                          iDragging = ETrue;
+                          }
+                      if (iDragging)
+                          {
+                          TInt s = iDragScroll + dy / rh;
+                          TInt maxScroll = iEntries->Count() - 1;
+                          if (s > maxScroll) s = maxScroll;
+                          if (s < 0) s = 0;
+                          if (s != iScroll)
+                              {
+                              iScroll = s;
+                              DrawNow();
+                              }
+                          }
+                      break;
+                      }
+                  case TPointerEvent::EButton1Up:
+                      if (!iDragging)
+                          {
+                          TInt idx = iScroll + (pt.iY - 44) / rh;
+                          if (pt.iY >= 44 && idx >= 0 && idx < iEntries->Count())
+                              {
+                              iSel = idx;
+                              iMessage.Zero();
+                              ActivateEntryL(idx);
+                              }
+                          else if (iHaveRom && pt.iY < 44)
+                              {
+                              iMode = EPlay;
+                              StartTimer();
+                              }
+                          DrawNow();
+                          }
+                      iDragging = EFalse;
+                      break;
+                  default:
+                      break;
+                  }
+              }
+
+          TKeyResponse CVNesContainer::OfferKeyEventL(const TKeyEvent& aKey, TEventCode aType)
+              {
+              const TInt sc = aKey.iScanCode;
+
+              if (iMode == EPlay)
+                  {
+                  TUint8 bit = 0;
+                  switch (sc)
+                      {
+                      case EStdKeyUpArrow:    bit = nes::kPadUp; break;
+                      case EStdKeyDownArrow:  bit = nes::kPadDown; break;
+                      case EStdKeyLeftArrow:  bit = nes::kPadLeft; break;
+                      case EStdKeyRightArrow: bit = nes::kPadRight; break;
+                      case 'X': case 'S':     bit = nes::kPadA; break;
+                      case 'Z': case 'A':     bit = nes::kPadB; break;
+                      case EStdKeyEnter: case EStdKeyDevice3: bit = nes::kPadStart; break;
+                      case EStdKeySpace: case EStdKeyBackspace: bit = nes::kPadSelect; break;
+                      default: break;
+                      }
+                  if (aType == EEventKeyDown && sc == EStdKeyDevice0)      // left soft key
+                      {
+                      iKeyPad = 0;
+                      iMode = EMenu;
+                      iMenuSel = 0;
+                      StopTimer();
+                      SaveBattery();
+                      DrawNow();
+                      return EKeyWasConsumed;
+                      }
+                  if (bit)
+                      {
+                      if (aType == EEventKeyDown) iKeyPad |= bit;
+                      else if (aType == EEventKeyUp) iKeyPad &= (TUint8)~bit;
+                      return EKeyWasConsumed;
+                      }
+                  return EKeyWasNotConsumed;
+                  }
+
+              if (aType != EEventKeyDown)
+                  {
+                  return (sc == EStdKeyUpArrow || sc == EStdKeyDownArrow || sc == EStdKeyEnter ||
+                          sc == EStdKeyDevice3 || sc == EStdKeyDevice0) ? EKeyWasConsumed : EKeyWasNotConsumed;
+                  }
+
+              if (iMode == EMenu)
+                  {
+                  if (sc == EStdKeyUpArrow && iMenuSel > 0) --iMenuSel;
+                  else if (sc == EStdKeyDownArrow && iMenuSel < KMenuCount - 1) ++iMenuSel;
+                  else if (sc == EStdKeyEnter || sc == EStdKeyDevice3) { MenuActionL(iMenuSel); return EKeyWasConsumed; }
+                  else if (sc == EStdKeyDevice0) { MenuActionL(0); return EKeyWasConsumed; }
+                  else return EKeyWasNotConsumed;
+                  DrawNow();
+                  return EKeyWasConsumed;
+                  }
+
+              // browser
+              TInt rh = RowHeight();
+              TInt rows = (Rect().Height() - 44) / rh;
+              if (rows < 1) rows = 1;
+              if (sc == EStdKeyUpArrow && iSel > 0) --iSel;
+              else if (sc == EStdKeyDownArrow && iSel < iEntries->Count() - 1) ++iSel;
+              else if (sc == EStdKeyEnter || sc == EStdKeyDevice3) { ActivateEntryL(iSel); DrawNow(); return EKeyWasConsumed; }
+              else if (sc == EStdKeyDevice0 && iHaveRom) { iMode = EPlay; StartTimer(); DrawNow(); return EKeyWasConsumed; }
+              else if (sc == EStdKeyBackspace) { GoUpL(); DrawNow(); return EKeyWasConsumed; }
+              else return EKeyWasNotConsumed;
+              if (iSel < iScroll) iScroll = iSel;
+              if (iSel >= iScroll + rows) iScroll = iSel - rows + 1;
+              DrawNow();
+              return EKeyWasConsumed;
+              }
+          VNES_EOF
+          mkdir -p symbian/core
+          cat > symbian/core/nes.cpp <<'VNES_EOF'
+          // nes.cpp - system glue: construction, iNES loading, frame loop.
+          #include "nes.h"
+
+          namespace nes {
+
+          Nes::Nes() {
+              // The class holds only integers and pointers (no vtable), so a raw clear is
+              // safe and keeps the constructor valid on allocators that don't zero memory.
+              MemFill(this, 0, sizeof(Nes));
+              error_ = "";
+          }
+
+          Nes::~Nes() {
+              Unload();
+              PlatFree(ram_);
+              PlatFree(vram_);
+              PlatFree(prgRam_);
+              PlatFree(fb_);
+              ram_ = 0; vram_ = 0; prgRam_ = 0; fb_ = 0;
+          }
+
+          bool Nes::Init() {
+              ram_ = (u8*)PlatAlloc(0x800);
+              vram_ = (u8*)PlatAlloc(0x1000);
+              prgRam_ = (u8*)PlatAlloc(0x2000);
+              fb_ = (u32*)PlatAlloc(kScreenW * kScreenH * 4);
+              if (!ram_ || !vram_ || !prgRam_ || !fb_) { error_ = "Out of memory"; return false; }
+              return true;
+          }
+
+          void Nes::Unload() {
+              romLoaded_ = false;
+              PlatFree(prg_); prg_ = 0; prgSize_ = 0;
+              PlatFree(chr_); chr_ = 0; chrSize_ = 0;
+          }
+
+          static bool MapperSupported(int id) {
+              switch (id) {
+              case 0: case 1: case 2: case 3: case 4: case 7: case 9: case 10: case 11:
+              case 33: case 34: case 66: case 71: case 75: case 79: case 87: case 94:
+              case 140: case 180:
+                  return true;
+              default:
+                  return false;
+              }
+          }
+
+          bool Nes::LoadRom(const u8* d, u32 size) {
+              Unload();
+              if (!ram_ && !Init()) return false;
+              if (size < 16 || d[0] != 'N' || d[1] != 'E' || d[2] != 'S' || d[3] != 0x1A) {
+                  error_ = "Not an iNES file";
+                  return false;
+              }
+              u32 prgKb16 = d[4], chrKb8 = d[5];
+              u8 f6 = d[6], f7 = d[7];
+              int mapper = (f6 >> 4) | (f7 & 0xF0);
+              if ((f7 & 0x0C) == 0x08) mapper = (f6 >> 4) | (f7 & 0xF0) | ((d[8] & 0x0F) << 8);   // NES 2.0
+              if (!MapperSupported(mapper)) { error_ = "Mapper not supported"; return false; }
+              u32 off = 16 + ((f6 & 4) ? 512 : 0);
+              u32 prgBytes = prgKb16 * 16384u;
+              u32 chrBytes = chrKb8 * 8192u;
+              if (prgBytes == 0 || off + prgBytes + chrBytes > size) { error_ = "ROM file is truncated"; return false; }
+
+              prg_ = (u8*)PlatAlloc(prgBytes);
+              if (!prg_) { error_ = "Out of memory"; return false; }
+              MemCopy(prg_, d + off, prgBytes);
+              prgSize_ = prgBytes;
+              prgBanks8_ = prgBytes / 0x2000;
+              if (chrBytes) {
+                  chr_ = (u8*)PlatAlloc(chrBytes);
+                  if (!chr_) { Unload(); error_ = "Out of memory"; return false; }
+                  MemCopy(chr_, d + off + prgBytes, chrBytes);
+                  chrSize_ = chrBytes;
+                  chrIsRam_ = false;
+              } else {
+                  chrSize_ = 0x2000;
+                  chr_ = (u8*)PlatAlloc(chrSize_);
+                  if (!chr_) { Unload(); error_ = "Out of memory"; return false; }
+                  chrIsRam_ = true;
+              }
+              chrBanks1_ = chrSize_ / 0x400;
+              mapperId_ = mapper;
+              battery_ = (f6 & 2) != 0;
+              fourScreen_ = (f6 & 8) != 0;
+              mirrorMode_ = fourScreen_ ? kMirrorFour : ((f6 & 1) ? kMirrorVert : kMirrorHoriz);
+              MemFill(prgRam_, 0, 0x2000);
+              error_ = "";
+              romLoaded_ = true;
+              Reset();
+              return true;
+          }
+
+          void Nes::Reset() {
+              if (!romLoaded_) return;
+              MemFill(ram_, 0xFF, 0x800);
+              ram_[0x008] = 0xF7; ram_[0x009] = 0xEF; ram_[0x00A] = 0xDF; ram_[0x00F] = 0xBF;   // same power-on pattern as vNES
+              MemFill(vram_, 0, 0x1000);
+              if (chrIsRam_) MemFill(chr_, 0, chrSize_);
+              padStrobe_ = 0;
+              padShift_[0] = padShift_[1] = 0;
+              MapperInit();
+              PpuReset();
+              ApuReset();
+              CpuReset();
+              frameCount_ = 0;
+              MemFill(fb_, 0, kScreenW * kScreenH * 4);
+          }
+
+          void Nes::RunFrame(bool render) {
+              if (!romLoaded_) return;
+              for (int line = 0; line < 262; ++line) RunScanline(line, render);
+              ++frameCount_;
+          }
+
+          }  // namespace nes
+          VNES_EOF
+          mkdir -p symbian/core
+          cat > symbian/core/nes.h <<'VNES_EOF'
+          // nes.h - portable NES core for the vNES Symbian port.
+          //
+          // Plain C++98: no exceptions, no RTTI, no STL, no static constructors, no
+          // floating point.  The only platform dependency is PlatAlloc/PlatFree, which
+          // the host application provides (see app/src/nes_platform.cpp on Symbian and
+          // tools/host_test.cpp on a desktop machine).
+          #ifndef NES_H
+          #define NES_H
+
+          namespace nes {
+
+          typedef unsigned char u8;
+          typedef signed char s8;
+          typedef unsigned short u16;
+          typedef short s16;
+          typedef unsigned int u32;
+          typedef int s32;
+
+          enum {
+              kScreenW = 256,
+              kScreenH = 240,
+              kAudioRate = 22050,
+              kAudioRing = 2048
+          };
+
+          // Joypad bit layout used by SetPad().
+          enum {
+              kPadA = 0x01, kPadB = 0x02, kPadSelect = 0x04, kPadStart = 0x08,
+              kPadUp = 0x10, kPadDown = 0x20, kPadLeft = 0x40, kPadRight = 0x80
+          };
+
+          // Provided by the host.  PlatAlloc returns zero-filled memory or 0.
+          void* PlatAlloc(u32 size);
+          void PlatFree(void* p);
+
+          inline void MemCopy(void* d, const void* s, u32 n) {
+              u8* dd = (u8*)d;
+              const u8* ss = (const u8*)s;
+              while (n--) *dd++ = *ss++;
+          }
+          inline void MemFill(void* d, u8 v, u32 n) {
+              u8* dd = (u8*)d;
+              while (n--) *dd++ = v;
+          }
+
+          enum Mirroring { kMirrorHoriz = 0, kMirrorVert = 1, kMirrorSingle0 = 2, kMirrorSingle1 = 3, kMirrorFour = 4 };
+
+          struct PulseChan {
+              u8 enabled, duty, lenHalt, constVol, vol;
+              u8 envStart, envDiv, envDecay;
+              u8 sweepEn, sweepPeriod, sweepNeg, sweepShift, sweepReload, sweepDiv;
+              u16 timer;
+              u32 acc;       // 16.16 CPU cycles accumulated towards the next duty step
+              u8 phase;
+              u8 length;
+              u8 out;
+          };
+
+          struct TriChan {
+              u8 enabled, control, linearReload, linearCount, reloadFlag;
+              u16 timer;
+              u32 acc;
+              u8 phase, length, out;
+          };
+
+          struct NoiseChan {
+              u8 enabled, lenHalt, constVol, vol;
+              u8 envStart, envDiv, envDecay;
+              u8 mode, periodIdx;
+              u16 shift;
+              u32 acc;
+              u8 length, out;
+          };
+
+          struct DmcChan {
+              u8 enabled, irqEn, loop, rateIdx, level;
+              u16 sampleAddr, sampleLen, curAddr, remain;
+              u8 buf, hasBuf, shiftReg, bitsLeft, silence;
+              u32 acc;
+              u8 irq;
+          };
+
+          class Nes {
+          public:
+              Nes();
+              ~Nes();
+
+              bool Init();                                   // allocate working memory
+              bool LoadRom(const u8* data, u32 size);        // iNES image; copies what it needs
+              void Unload();
+              bool RomLoaded() const { return romLoaded_; }
+              const char* LastError() const { return error_; }
+              int MapperId() const { return mapperId_; }
+
+              void Reset();
+              // Runs one video frame.  When render is false the PPU still runs (sprite 0
+              // hit, mapper IRQ) but pixels are not converted to RGB.
+              void RunFrame(bool render);
+
+              void SetPad(int idx, u8 bits) { padState_[idx & 1] = bits; }
+              const u32* FrameBuffer() const { return fb_; }       // 256x240, 0x00RRGGBB
+
+              int ReadAudio(s16* dst, int maxSamples);            // pops mono S16 samples
+
+              bool HasBattery() const { return battery_; }
+              u8* SaveRam() { return prgRam_; }
+              u32 SaveRamSize() const { return 0x2000; }
+
+              // ---- everything below is core-internal but public for speed/simplicity ----
+              // CPU
+              u8 a_, x_, y_, sp_;
+              u16 pc_;
+              u8 fC_, fZ_, fI_, fD_, fV_, fN_;
+              u8 nmiPending_;
+              s32 dotBudget_;       // PPU dots (3 per CPU cycle) left to run
+              u32 cpuCycles_;       // total CPU cycles executed
+
+              void CpuReset();
+              void CpuRun(s32 dots);
+              u32 CpuStep();
+              u8 Read(u16 a);
+              void Write(u16 a, u8 v);
+              u8 ReadSlow(u16 a);
+              u8 Peek(u16 a) { return Read(a); }
+              void Push(u8 v) { ram_[0x100 + sp_] = v; --sp_; }
+              u8 Pull() { ++sp_; return ram_[0x100 + sp_]; }
+              u8 GetP(bool brk) const;
+              void SetP(u8 p);
+
+              // PPU
+              u8 ppuCtrl_, ppuMask_, ppuStatus_, oamAddr_, ppuBuf_, ppuLatch_;
+              u16 v_, t_;
+              u8 fineX_, w_;
+              u8 oam_[256];
+              u8 palRam_[32];
+              u32 pal32_[64];
+              u32 palOut_[32];
+              u8 lineBg_[256 + 16];
+              u8 lineSpr_[256 + 16];
+              int s0HitX_;           // dot (0..255) at which sprite 0 hits on this line, or -1
+              int frameCount_;
+
+              void PpuReset();
+              void PpuWrite(u16 reg, u8 v);
+              u8 PpuReadReg(u16 reg);
+              u8 PpuRead(u16 addr);
+              void PpuWriteMem(u16 addr, u8 v);
+              void RenderLine(int y, bool render);
+              void FillBackdrop(int y);
+              void SetMirroring(int mode);
+              void UpdatePalOut();
+              bool Rendering() const { return (ppuMask_ & 0x18) != 0; }
+              void IncV();
+              void EndLineScroll(int line);
+              void RunScanline(int line, bool render);
+
+              // APU
+              PulseChan pulse_[2];
+              TriChan tri_;
+              NoiseChan noise_;
+              DmcChan dmc_;
+              u8 fcMode5_, fcIrqInhibit_, fcStep_, fcIrq_;
+              u32 fcAcc_;
+              s32 dotAcc_;
+              s32 hpPrev_, hpOut_;
+              s16 audio_[kAudioRing];
+              int audioHead_, audioTail_, audioCount_;
+
+              void ApuReset();
+              void ApuWrite(u16 a, u8 v);
+              u8 ApuReadStatus();
+              void ApuRunLine(s32 dots);
+              void ApuSample();
+              void ApuQuarter();
+              void ApuHalf();
+              void ApuDmcBit();
+              void ApuDmcFetch();
+
+              // Mapper
+              int mapperId_;
+              u8 mirrorMode_;
+              u8* prg_; u32 prgSize_;
+              u8* chr_; u32 chrSize_; bool chrIsRam_;
+              u8 prgRamData_[1];   // (unused marker; real RAM is prgRam_)
+              u8* prgRam_;
+              u8* vram_;           // 4 KB (2 KB used unless four-screen)
+              u8* prgPtr_[4];      // 8 KB windows at $8000/$A000/$C000/$E000
+              u8* chrPtr_[8];      // 1 KB windows
+              u8* ntPtr_[4];
+              bool battery_, fourScreen_;
+              u8 mapIrq_;
+              u32 prgBanks8_, chrBanks1_;
+              // mapper register file (union of what the supported mappers need)
+              u32 mreg_[16];
+              u8 mm1_shift_, mm1_count_;
+              u8 mm3_irqLatch_, mm3_irqCounter_, mm3_irqEnable_, mm3_irqReload_;
+              u8 mm9_latch_[2];
+              u8 mm9_sel_[2][2];
+
+              void MapperInit();
+              void MapperWrite(u16 a, u8 v);       // $8000-$FFFF
+              void MapperWriteLow(u16 a, u8 v);    // $4020-$7FFF
+              void MapperScanline();
+              void MapperPpuFetch(u16 addr);       // called for pattern fetches (MMC2/4)
+              void Prg8(int slot, u32 bank);
+              void Prg16(int slot, u32 bank);      // slot 0 -> $8000, 1 -> $C000
+              void Prg32(u32 bank);
+              void Chr1(int slot, u32 bank);
+              void Chr2(int slot, u32 bank);
+              void Chr4(int slot, u32 bank);
+              void Chr8(u32 bank);
+              void Mmc1Sync();
+              void Mmc3Sync();
+              void Mmc2Sync();
+
+              // Cartridge / system RAM
+              u8* ram_;            // 2 KB
+              u8 padState_[2];
+              u8 padShift_[2];
+              u8 padStrobe_;
+              u32* fb_;
+              bool romLoaded_;
+              const char* error_;
+          };
+
+          }  // namespace nes
+
+          #endif
+          VNES_EOF
+          mkdir -p symbian/core
+          cat > symbian/core/nes_apu.cpp <<'VNES_EOF'
+          // nes_apu.cpp - audio unit.  Channels are advanced per output sample (22.05 kHz)
+          // in 16.16 fixed point CPU cycles; no floating point is used.
+          #include "nes.h"
+          #include "nes_apu_tables.h"
+
+          namespace nes {
+
+          static const u8 kLen[32] = {
+              10, 254, 20, 2, 40, 4, 80, 6, 160, 8, 60, 10, 14, 12, 26, 14,
+              12, 16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30 };
+          static const u8 kDuty[4] = { 0x40, 0x60, 0x78, 0x9F };
+          static const u16 kNoisePeriod[16] = { 4, 8, 16, 32, 64, 96, 128, 160, 202, 254, 380, 508, 762, 1016, 2034, 4068 };
+          static const u16 kDmcRate[16] = { 428, 380, 340, 320, 286, 254, 226, 214, 190, 160, 142, 128, 106, 84, 72, 54 };
+
+          static const u32 kCpuPerSample16 = 5319424u;    // 81.17 CPU cycles per sample, 16.16
+          static const u32 kFrameStep16 = 488734720u;     // 7457.5 CPU cycles, 16.16
+          static const s32 kDotsPerSample256 = 62337;     // 243.5 PPU dots per sample, 24.8
+
+          void Nes::ApuReset() {
+              MemFill(pulse_, 0, sizeof(pulse_));
+              MemFill(&tri_, 0, sizeof(tri_));
+              MemFill(&noise_, 0, sizeof(noise_));
+              MemFill(&dmc_, 0, sizeof(dmc_));
+              noise_.shift = 1;
+              dmc_.bitsLeft = 8;
+              dmc_.silence = 1;
+              dmc_.sampleAddr = 0xC000;
+              dmc_.sampleLen = 1;
+              fcMode5_ = fcIrqInhibit_ = fcStep_ = fcIrq_ = 0;
+              fcAcc_ = 0;
+              dotAcc_ = 0;
+              hpPrev_ = hpOut_ = 0;
+              audioHead_ = audioTail_ = audioCount_ = 0;
+          }
+
+          void Nes::ApuWrite(u16 a, u8 v) {
+              if (a >= 0x4000 && a <= 0x4007) {
+                  PulseChan& p = pulse_[(a >> 2) & 1];
+                  switch (a & 3) {
+                  case 0: p.duty = v >> 6; p.lenHalt = (v >> 5) & 1; p.constVol = (v >> 4) & 1; p.vol = v & 15; break;
+                  case 1: p.sweepEn = v >> 7; p.sweepPeriod = (v >> 4) & 7; p.sweepNeg = (v >> 3) & 1;
+                          p.sweepShift = v & 7; p.sweepReload = 1; break;
+                  case 2: p.timer = (u16)((p.timer & 0x700) | v); break;
+                  default:
+                      p.timer = (u16)((p.timer & 0xFF) | ((v & 7) << 8));
+                      if (p.enabled) p.length = kLen[v >> 3];
+                      p.phase = 0;
+                      p.envStart = 1;
+                      break;
+                  }
+                  return;
+              }
+              switch (a) {
+              case 0x4008: tri_.control = v >> 7; tri_.linearReload = v & 0x7F; break;
+              case 0x400A: tri_.timer = (u16)((tri_.timer & 0x700) | v); break;
+              case 0x400B:
+                  tri_.timer = (u16)((tri_.timer & 0xFF) | ((v & 7) << 8));
+                  if (tri_.enabled) tri_.length = kLen[v >> 3];
+                  tri_.reloadFlag = 1;
+                  break;
+              case 0x400C: noise_.lenHalt = (v >> 5) & 1; noise_.constVol = (v >> 4) & 1; noise_.vol = v & 15; break;
+              case 0x400E: noise_.mode = v >> 7; noise_.periodIdx = v & 15; break;
+              case 0x400F:
+                  if (noise_.enabled) noise_.length = kLen[v >> 3];
+                  noise_.envStart = 1;
+                  break;
+              case 0x4010:
+                  dmc_.irqEn = v >> 7; dmc_.loop = (v >> 6) & 1; dmc_.rateIdx = v & 15;
+                  if (!dmc_.irqEn) dmc_.irq = 0;
+                  break;
+              case 0x4011: dmc_.level = v & 0x7F; break;
+              case 0x4012: dmc_.sampleAddr = (u16)(0xC000 + v * 64); break;
+              case 0x4013: dmc_.sampleLen = (u16)(v * 16 + 1); break;
+              case 0x4015:
+                  pulse_[0].enabled = v & 1; if (!pulse_[0].enabled) pulse_[0].length = 0;
+                  pulse_[1].enabled = (v >> 1) & 1; if (!pulse_[1].enabled) pulse_[1].length = 0;
+                  tri_.enabled = (v >> 2) & 1; if (!tri_.enabled) tri_.length = 0;
+                  noise_.enabled = (v >> 3) & 1; if (!noise_.enabled) noise_.length = 0;
+                  dmc_.irq = 0;
+                  if (v & 0x10) {
+                      dmc_.enabled = 1;
+                      if (dmc_.remain == 0) { dmc_.curAddr = dmc_.sampleAddr; dmc_.remain = dmc_.sampleLen; }
+                      if (!dmc_.hasBuf) ApuDmcFetch();
+                  } else {
+                      dmc_.enabled = 0;
+                      dmc_.remain = 0;
+                  }
+                  break;
+              case 0x4017:
+                  fcMode5_ = v >> 7;
+                  fcIrqInhibit_ = (v >> 6) & 1;
+                  if (fcIrqInhibit_) fcIrq_ = 0;
+                  fcStep_ = 0;
+                  fcAcc_ = 0;
+                  if (fcMode5_) { ApuQuarter(); ApuHalf(); }
+                  break;
+              default: break;
+              }
+          }
+
+          u8 Nes::ApuReadStatus() {
+              u8 r = 0;
+              if (pulse_[0].length) r |= 1;
+              if (pulse_[1].length) r |= 2;
+              if (tri_.length) r |= 4;
+              if (noise_.length) r |= 8;
+              if (dmc_.remain) r |= 0x10;
+              if (fcIrq_) r |= 0x40;
+              if (dmc_.irq) r |= 0x80;
+              fcIrq_ = 0;
+              return r;
+          }
+
+          static inline void ClockEnv(u8& start, u8& div, u8& decay, u8 vol, u8 loop) {
+              if (start) { start = 0; decay = 15; div = vol; }
+              else if (div == 0) {
+                  div = vol;
+                  if (decay > 0) --decay; else if (loop) decay = 15;
+              } else --div;
+          }
+
+          void Nes::ApuQuarter() {
+              for (int i = 0; i < 2; ++i) {
+                  PulseChan& p = pulse_[i];
+                  ClockEnv(p.envStart, p.envDiv, p.envDecay, p.vol, p.lenHalt);
+              }
+              ClockEnv(noise_.envStart, noise_.envDiv, noise_.envDecay, noise_.vol, noise_.lenHalt);
+              if (tri_.reloadFlag) tri_.linearCount = tri_.linearReload;
+              else if (tri_.linearCount > 0) --tri_.linearCount;
+              if (!tri_.control) tri_.reloadFlag = 0;
+          }
+
+          void Nes::ApuHalf() {
+              for (int i = 0; i < 2; ++i) {
+                  PulseChan& p = pulse_[i];
+                  if (!p.lenHalt && p.length > 0) --p.length;
+                  s32 change = p.timer >> p.sweepShift;
+                  s32 target = p.sweepNeg ? (s32)p.timer - change - (i == 0 ? 1 : 0) : (s32)p.timer + change;
+                  bool mute = p.timer < 8 || target > 0x7FF;
+                  if (p.sweepDiv == 0 && p.sweepEn && p.sweepShift && !mute) p.timer = (u16)target;
+                  if (p.sweepDiv == 0 || p.sweepReload) { p.sweepDiv = p.sweepPeriod; p.sweepReload = 0; }
+                  else --p.sweepDiv;
+              }
+              if (!tri_.control && tri_.length > 0) --tri_.length;
+              if (!noise_.lenHalt && noise_.length > 0) --noise_.length;
+          }
+
+          void Nes::ApuDmcFetch() {
+              if (dmc_.hasBuf || dmc_.remain == 0) return;
+              dmc_.buf = Read(dmc_.curAddr);
+              dmc_.hasBuf = 1;
+              dotBudget_ -= 4 * 3;
+              cpuCycles_ += 4;
+              dmc_.curAddr = (u16)((dmc_.curAddr + 1) | 0x8000);
+              if (--dmc_.remain == 0) {
+                  if (dmc_.loop) { dmc_.curAddr = dmc_.sampleAddr; dmc_.remain = dmc_.sampleLen; }
+                  else if (dmc_.irqEn) dmc_.irq = 1;
+              }
+          }
+
+          void Nes::ApuDmcBit() {
+              if (!dmc_.silence) {
+                  if (dmc_.shiftReg & 1) { if (dmc_.level <= 125) dmc_.level = (u8)(dmc_.level + 2); }
+                  else { if (dmc_.level >= 2) dmc_.level = (u8)(dmc_.level - 2); }
+                  dmc_.shiftReg >>= 1;
+              }
+              if (--dmc_.bitsLeft == 0) {
+                  dmc_.bitsLeft = 8;
+                  if (dmc_.hasBuf) {
+                      dmc_.shiftReg = dmc_.buf;
+                      dmc_.hasBuf = 0;
+                      dmc_.silence = 0;
+                      ApuDmcFetch();
+                  } else {
+                      dmc_.silence = 1;
+                  }
+              }
+          }
+
+          void Nes::ApuSample() {
+              // frame sequencer
+              fcAcc_ += kCpuPerSample16;
+              while (fcAcc_ >= kFrameStep16) {
+                  fcAcc_ -= kFrameStep16;
+                  if (!fcMode5_) {
+                      switch (fcStep_) {
+                      case 0: ApuQuarter(); break;
+                      case 1: ApuQuarter(); ApuHalf(); break;
+                      case 2: ApuQuarter(); break;
+                      default: ApuQuarter(); ApuHalf(); if (!fcIrqInhibit_) fcIrq_ = 1; break;
+                      }
+                      fcStep_ = (u8)((fcStep_ + 1) & 3);
+                  } else {
+                      switch (fcStep_) {
+                      case 0: ApuQuarter(); break;
+                      case 1: ApuQuarter(); ApuHalf(); break;
+                      case 2: ApuQuarter(); break;
+                      case 3: break;
+                      default: ApuQuarter(); ApuHalf(); break;
+                      }
+                      fcStep_ = (u8)(fcStep_ + 1);
+                      if (fcStep_ >= 5) fcStep_ = 0;
+                  }
+              }
+
+              // pulse
+              int mix = 0;
+              int pv[2];
+              for (int i = 0; i < 2; ++i) {
+                  PulseChan& p = pulse_[i];
+                  u32 period16 = (u32)((p.timer + 1) * 2) << 16;
+                  p.acc += kCpuPerSample16;
+                  if (p.acc >= period16) {
+                      u32 n = p.acc / period16;
+                      p.acc -= n * period16;
+                      p.phase = (u8)((p.phase + n) & 7);
+                  }
+                  s32 change = p.timer >> p.sweepShift;
+                  s32 target = p.sweepNeg ? (s32)p.timer - change - (i == 0 ? 1 : 0) : (s32)p.timer + change;
+                  if (p.length == 0 || p.timer < 8 || target > 0x7FF || !((kDuty[p.duty] >> (7 - p.phase)) & 1)) pv[i] = 0;
+                  else pv[i] = p.constVol ? p.vol : p.envDecay;
+              }
+              mix = pv[0] + pv[1];
+
+              // triangle
+              {
+                  u32 period16 = (u32)(tri_.timer + 1) << 16;
+                  tri_.acc += kCpuPerSample16;
+                  if (tri_.acc >= period16) {
+                      u32 n = tri_.acc / period16;
+                      tri_.acc -= n * period16;
+                      if (tri_.length > 0 && tri_.linearCount > 0) tri_.phase = (u8)((tri_.phase + n) & 31);
+                  }
+                  if (tri_.timer >= 2) tri_.out = tri_.phase < 16 ? (u8)(15 - tri_.phase) : (u8)(tri_.phase - 16);
+              }
+
+              // noise
+              {
+                  u32 period16 = (u32)kNoisePeriod[noise_.periodIdx] << 16;
+                  noise_.acc += kCpuPerSample16;
+                  if (noise_.acc >= period16) {
+                      u32 n = noise_.acc / period16;
+                      noise_.acc -= n * period16;
+                      while (n--) {
+                          u16 fb = (u16)((noise_.shift & 1) ^ ((noise_.shift >> (noise_.mode ? 6 : 1)) & 1));
+                          noise_.shift = (u16)((noise_.shift >> 1) | (fb << 14));
+                      }
+                  }
+                  if (noise_.length == 0 || (noise_.shift & 1)) noise_.out = 0;
+                  else noise_.out = noise_.constVol ? noise_.vol : noise_.envDecay;
+              }
+
+              // DMC
+              {
+                  u32 period16 = (u32)kDmcRate[dmc_.rateIdx] << 16;
+                  dmc_.acc += kCpuPerSample16;
+                  while (dmc_.acc >= period16) { dmc_.acc -= period16; ApuDmcBit(); }
+              }
+
+              s32 x = kPulseMix[mix] + kTndMix[tri_.out * 3 + noise_.out * 2 + dmc_.level];
+              hpOut_ = x - hpPrev_ + hpOut_ - (hpOut_ >> 7);
+              hpPrev_ = x;
+              s32 s = (hpOut_ * 3) >> 2;
+              if (s > 32767) s = 32767;
+              if (s < -32768) s = -32768;
+              if (audioCount_ < kAudioRing) {
+                  audio_[audioHead_] = (s16)s;
+                  audioHead_ = (audioHead_ + 1) & (kAudioRing - 1);
+                  ++audioCount_;
+              }
+          }
+
+          void Nes::ApuRunLine(s32 dots) {
+              dotAcc_ += dots * 256;
+              while (dotAcc_ >= kDotsPerSample256) {
+                  dotAcc_ -= kDotsPerSample256;
+                  ApuSample();
+              }
+          }
+
+          int Nes::ReadAudio(s16* dst, int maxSamples) {
+              int n = 0;
+              while (n < maxSamples && audioCount_ > 0) {
+                  dst[n++] = audio_[audioTail_];
+                  audioTail_ = (audioTail_ + 1) & (kAudioRing - 1);
+                  --audioCount_;
+              }
+              return n;
+          }
+
+          }  // namespace nes
+          VNES_EOF
+          mkdir -p symbian/core
+          cat > symbian/core/nes_apu_tables.h <<'VNES_EOF'
+          // Generated: standard NES nonlinear mixer curves scaled to 16-bit
+          #ifndef NES_APU_TABLES_H
+          #define NES_APU_TABLES_H
+          namespace nes {
+          static const short kPulseMix[31] = {
+              0, 380, 752, 1114, 1468, 1814, 2152, 2482, 2805, 3120, 3429, 3731,
+              4026, 4316, 4599, 4876, 5148, 5414, 5675, 5930, 6181, 6426, 6667, 6903,
+              7135, 7362, 7586, 7805, 8020, 8231, 8438,
+          };
+          static const short kTndMix[203] = {
+              0, 220, 437, 653, 867, 1080, 1291, 1500, 1707, 1913, 2117, 2320,
+              2521, 2720, 2918, 3115, 3309, 3503, 3694, 3885, 4074, 4261, 4447, 4632,
+              4815, 4997, 5178, 5357, 5535, 5712, 5887, 6061, 6234, 6406, 6576, 6745,
+              6913, 7079, 7245, 7409, 7572, 7734, 7895, 8055, 8214, 8371, 8528, 8683,
+              8837, 8991, 9143, 9294, 9444, 9593, 9741, 9888, 10035, 10180, 10324, 10467,
+              10610, 10751, 10891, 11031, 11170, 11307, 11444, 11580, 11715, 11849, 11983, 12115,
+              12247, 12378, 12508, 12637, 12765, 12893, 13020, 13146, 13271, 13395, 13519, 13642,
+              13764, 13886, 14006, 14126, 14246, 14364, 14482, 14599, 14715, 14831, 14946, 15061,
+              15174, 15287, 15400, 15511, 15622, 15733, 15842, 15952, 16060, 16168, 16275, 16382,
+              16488, 16593, 16698, 16802, 16906, 17009, 17112, 17213, 17315, 17416, 17516, 17616,
+              17715, 17813, 17911, 18009, 18106, 18202, 18298, 18394, 18489, 18583, 18677, 18770,
+              18863, 18955, 19047, 19139, 19230, 19320, 19410, 19500, 19589, 19677, 19765, 19853,
+              19940, 20027, 20113, 20199, 20285, 20370, 20454, 20538, 20622, 20705, 20788, 20871,
+              20953, 21034, 21116, 21196, 21277, 21357, 21437, 21516, 21595, 21673, 21751, 21829,
+              21906, 21983, 22060, 22136, 22212, 22287, 22362, 22437, 22511, 22586, 22659, 22733,
+              22806, 22878, 22950, 23022, 23094, 23165, 23236, 23307, 23377, 23447, 23517, 23586,
+              23655, 23724, 23792, 23860, 23928, 23996, 24063, 24130, 24196, 24262, 24328,
+          };
+          }
+          #endif
+          VNES_EOF
+          mkdir -p symbian/core
+          cat > symbian/core/nes_cpu.cpp <<'VNES_EOF'
+          // nes_cpu.cpp - 6502 interpreter and CPU bus.
+          #include "nes.h"
+          #include "nes_cpu_table.h"
+
+          namespace nes {
+
+          u8 Nes::GetP(bool brk) const {
+              return (u8)(fC_ | (fZ_ << 1) | (fI_ << 2) | (fD_ << 3) | (brk ? 0x10 : 0) | 0x20 | (fV_ << 6) | (fN_ << 7));
+          }
+
+          void Nes::SetP(u8 p) {
+              fC_ = p & 1;
+              fZ_ = (p >> 1) & 1;
+              fI_ = (p >> 2) & 1;
+              fD_ = (p >> 3) & 1;
+              fV_ = (p >> 6) & 1;
+              fN_ = (p >> 7) & 1;
+          }
+
+          u8 Nes::Read(u16 a) {
+              if (a < 0x2000) return ram_[a & 0x7FF];
+              if (a >= 0x8000) return prgPtr_[(a >> 13) & 3][a & 0x1FFF];
+              if (a >= 0x6000) return prgRam_[a - 0x6000];
+              return ReadSlow(a);
+          }
+
+          u8 Nes::ReadSlow(u16 a) {
+              if (a < 0x4000) return PpuReadReg(a);
+              if (a == 0x4015) return ApuReadStatus();
+              if (a == 0x4016 || a == 0x4017) {
+                  int i = a & 1;
+                  u8 bit;
+                  if (padStrobe_) {
+                      bit = padState_[i] & 1;
+                  } else {
+                      bit = padShift_[i] & 1;
+                      padShift_[i] = (u8)((padShift_[i] >> 1) | 0x80);
+                  }
+                  return (u8)(0x40 | bit);
+              }
+              return 0;
+          }
+
+          void Nes::Write(u16 a, u8 v) {
+              if (a < 0x2000) { ram_[a & 0x7FF] = v; return; }
+              if (a >= 0x8000) { MapperWrite(a, v); return; }
+              if (a < 0x4000) { PpuWrite(a, v); return; }
+              if (a < 0x4020) {
+                  if (a == 0x4014) {
+                      u16 base = (u16)(v << 8);
+                      for (int i = 0; i < 256; ++i) oam_[(u8)(oamAddr_ + i)] = Read((u16)(base + i));
+                      dotBudget_ -= 513 * 3;
+                      cpuCycles_ += 513;
+                  } else if (a == 0x4016) {
+                      padStrobe_ = v & 1;
+                      if (padStrobe_) {
+                          padShift_[0] = padState_[0];
+                          padShift_[1] = padState_[1];
+                      }
+                  } else {
+                      ApuWrite(a, v);
+                  }
+                  return;
+              }
+              if (a >= 0x6000) prgRam_[a - 0x6000] = v;
+              MapperWriteLow(a, v);
+          }
+
+          void Nes::CpuReset() {
+              a_ = x_ = y_ = 0;
+              sp_ = 0xFD;
+              SetP(0x04);
+              nmiPending_ = 0;
+              dotBudget_ = 0;
+              cpuCycles_ = 7;
+              pc_ = (u16)(Read(0xFFFC) | (Read(0xFFFD) << 8));
+          }
+
+          void Nes::CpuRun(s32 dots) {
+              dotBudget_ += dots;
+              while (dotBudget_ > 0) {
+                  u32 c = CpuStep();
+                  cpuCycles_ += c;
+                  dotBudget_ -= (s32)(c * 3);
+              }
+          }
+
+          #define SETNZ(v) do { fZ_ = ((v) & 0xFF) == 0; fN_ = ((v) >> 7) & 1; } while (0)
+
+          static inline u8 AdcCore(Nes* n, u8 val) {
+              u32 sum = (u32)n->a_ + val + n->fC_;
+              n->fV_ = (u8)((~(n->a_ ^ val) & (n->a_ ^ sum) & 0x80) != 0);
+              n->fC_ = sum > 0xFF;
+              n->a_ = (u8)sum;
+              return n->a_;
+          }
+
+          u32 Nes::CpuStep() {
+              if (nmiPending_) {
+                  nmiPending_ = 0;
+                  Push((u8)(pc_ >> 8)); Push((u8)pc_); Push(GetP(false));
+                  fI_ = 1;
+                  pc_ = (u16)(Read(0xFFFA) | (Read(0xFFFB) << 8));
+                  return 7;
+              }
+              if (!fI_ && (mapIrq_ || fcIrq_ || dmc_.irq)) {
+                  Push((u8)(pc_ >> 8)); Push((u8)pc_); Push(GetP(false));
+                  fI_ = 1;
+                  pc_ = (u16)(Read(0xFFFE) | (Read(0xFFFF) << 8));
+                  return 7;
+              }
+
+              const u8 opc = Read(pc_++);
+              const OpInfo& oi = kOpTable[opc];
+              u32 cyc = kCycles[opc];
+              u16 ea = 0;
+              bool crossed = false;
+
+              switch (oi.mode) {
+              case AM_IMP: case AM_ACC: break;
+              case AM_IMM: ea = pc_++; break;
+              case AM_ZP: ea = Read(pc_++); break;
+              case AM_ZPX: ea = (u8)(Read(pc_++) + x_); break;
+              case AM_ZPY: ea = (u8)(Read(pc_++) + y_); break;
+              case AM_ABS: ea = (u16)(Read(pc_) | (Read((u16)(pc_ + 1)) << 8)); pc_ += 2; break;
+              case AM_ABX: {
+                  u16 base = (u16)(Read(pc_) | (Read((u16)(pc_ + 1)) << 8)); pc_ += 2;
+                  ea = (u16)(base + x_);
+                  crossed = (base & 0xFF00) != (ea & 0xFF00);
+                  break; }
+              case AM_ABY: {
+                  u16 base = (u16)(Read(pc_) | (Read((u16)(pc_ + 1)) << 8)); pc_ += 2;
+                  ea = (u16)(base + y_);
+                  crossed = (base & 0xFF00) != (ea & 0xFF00);
+                  break; }
+              case AM_IND: {
+                  u16 ptr = (u16)(Read(pc_) | (Read((u16)(pc_ + 1)) << 8)); pc_ += 2;
+                  ea = (u16)(Read(ptr) | (Read((u16)((ptr & 0xFF00) | ((ptr + 1) & 0xFF))) << 8));
+                  break; }
+              case AM_IZX: {
+                  u8 zp = (u8)(Read(pc_++) + x_);
+                  ea = (u16)(Read(zp) | (Read((u8)(zp + 1)) << 8));
+                  break; }
+              case AM_IZY: {
+                  u8 zp = Read(pc_++);
+                  u16 base = (u16)(Read(zp) | (Read((u8)(zp + 1)) << 8));
+                  ea = (u16)(base + y_);
+                  crossed = (base & 0xFF00) != (ea & 0xFF00);
+                  break; }
+              case AM_REL: {
+                  s8 off = (s8)Read(pc_++);
+                  ea = (u16)(pc_ + off);
+                  break; }
+              }
+              if (crossed && oi.penalty) ++cyc;
+
+              u8 val;
+              u32 t;
+              bool acc = (oi.mode == AM_ACC);
+              switch (oi.op) {
+              case OP_ADC: AdcCore(this, Read(ea)); SETNZ(a_); break;
+              case OP_SBC: AdcCore(this, (u8)(Read(ea) ^ 0xFF)); SETNZ(a_); break;
+              case OP_AND: a_ &= Read(ea); SETNZ(a_); break;
+              case OP_ORA: a_ |= Read(ea); SETNZ(a_); break;
+              case OP_EOR: a_ ^= Read(ea); SETNZ(a_); break;
+              case OP_ASL:
+                  val = acc ? a_ : Read(ea);
+                  fC_ = val >> 7; val <<= 1; SETNZ(val);
+                  if (acc) a_ = val; else Write(ea, val);
+                  break;
+              case OP_LSR:
+                  val = acc ? a_ : Read(ea);
+                  fC_ = val & 1; val >>= 1; SETNZ(val);
+                  if (acc) a_ = val; else Write(ea, val);
+                  break;
+              case OP_ROL:
+                  val = acc ? a_ : Read(ea);
+                  t = (u32)((val << 1) | fC_); fC_ = val >> 7; val = (u8)t; SETNZ(val);
+                  if (acc) a_ = val; else Write(ea, val);
+                  break;
+              case OP_ROR:
+                  val = acc ? a_ : Read(ea);
+                  t = (u32)((val >> 1) | (fC_ << 7)); fC_ = val & 1; val = (u8)t; SETNZ(val);
+                  if (acc) a_ = val; else Write(ea, val);
+                  break;
+              case OP_BCC: if (!fC_) goto branch; break;
+              case OP_BCS: if (fC_) goto branch; break;
+              case OP_BEQ: if (fZ_) goto branch; break;
+              case OP_BNE: if (!fZ_) goto branch; break;
+              case OP_BMI: if (fN_) goto branch; break;
+              case OP_BPL: if (!fN_) goto branch; break;
+              case OP_BVC: if (!fV_) goto branch; break;
+              case OP_BVS: if (fV_) goto branch; break;
+              case OP_BIT:
+                  val = Read(ea);
+                  fZ_ = (val & a_) == 0; fV_ = (val >> 6) & 1; fN_ = val >> 7;
+                  break;
+              case OP_BRK:
+                  ++pc_;
+                  Push((u8)(pc_ >> 8)); Push((u8)pc_); Push(GetP(true));
+                  fI_ = 1;
+                  pc_ = (u16)(Read(0xFFFE) | (Read(0xFFFF) << 8));
+                  break;
+              case OP_CLC: fC_ = 0; break;
+              case OP_CLD: fD_ = 0; break;
+              case OP_CLI: fI_ = 0; break;
+              case OP_CLV: fV_ = 0; break;
+              case OP_SEC: fC_ = 1; break;
+              case OP_SED: fD_ = 1; break;
+              case OP_SEI: fI_ = 1; break;
+              case OP_CMP: val = Read(ea); fC_ = a_ >= val; t = (u8)(a_ - val); SETNZ(t); break;
+              case OP_CPX: val = Read(ea); fC_ = x_ >= val; t = (u8)(x_ - val); SETNZ(t); break;
+              case OP_CPY: val = Read(ea); fC_ = y_ >= val; t = (u8)(y_ - val); SETNZ(t); break;
+              case OP_DEC: val = (u8)(Read(ea) - 1); Write(ea, val); SETNZ(val); break;
+              case OP_INC: val = (u8)(Read(ea) + 1); Write(ea, val); SETNZ(val); break;
+              case OP_DEX: --x_; SETNZ(x_); break;
+              case OP_DEY: --y_; SETNZ(y_); break;
+              case OP_INX: ++x_; SETNZ(x_); break;
+              case OP_INY: ++y_; SETNZ(y_); break;
+              case OP_JMP: pc_ = ea; break;
+              case OP_JSR: {
+                  u16 ret = (u16)(pc_ - 1);
+                  Push((u8)(ret >> 8)); Push((u8)ret);
+                  pc_ = ea;
+                  break; }
+              case OP_RTS: {
+                  u8 lo = Pull(); u8 hi = Pull();
+                  pc_ = (u16)(((hi << 8) | lo) + 1);
+                  break; }
+              case OP_RTI: {
+                  SetP(Pull());
+                  u8 lo = Pull(); u8 hi = Pull();
+                  pc_ = (u16)((hi << 8) | lo);
+                  break; }
+              case OP_LDA: a_ = Read(ea); SETNZ(a_); break;
+              case OP_LDX: x_ = Read(ea); SETNZ(x_); break;
+              case OP_LDY: y_ = Read(ea); SETNZ(y_); break;
+              case OP_LAX: a_ = x_ = Read(ea); SETNZ(a_); break;
+              case OP_STA: Write(ea, a_); break;
+              case OP_STX: Write(ea, x_); break;
+              case OP_STY: Write(ea, y_); break;
+              case OP_SAX: Write(ea, (u8)(a_ & x_)); break;
+              case OP_NOP:
+                  if (oi.mode != AM_IMP && oi.mode != AM_IMM) (void)Read(ea);
+                  break;
+              case OP_PHA: Push(a_); break;
+              case OP_PHP: Push(GetP(true)); break;
+              case OP_PLA: a_ = Pull(); SETNZ(a_); break;
+              case OP_PLP: SetP(Pull()); break;
+              case OP_TAX: x_ = a_; SETNZ(x_); break;
+              case OP_TAY: y_ = a_; SETNZ(y_); break;
+              case OP_TSX: x_ = sp_; SETNZ(x_); break;
+              case OP_TXA: a_ = x_; SETNZ(a_); break;
+              case OP_TXS: sp_ = x_; break;
+              case OP_TYA: a_ = y_; SETNZ(a_); break;
+              case OP_DCP:
+                  val = (u8)(Read(ea) - 1); Write(ea, val);
+                  fC_ = a_ >= val; t = (u8)(a_ - val); SETNZ(t);
+                  break;
+              case OP_ISB:
+                  val = (u8)(Read(ea) + 1); Write(ea, val);
+                  AdcCore(this, (u8)(val ^ 0xFF)); SETNZ(a_);
+                  break;
+              case OP_SLO:
+                  val = Read(ea); fC_ = val >> 7; val <<= 1; Write(ea, val);
+                  a_ |= val; SETNZ(a_);
+                  break;
+              case OP_RLA:
+                  val = Read(ea); t = (u32)((val << 1) | fC_); fC_ = val >> 7; val = (u8)t; Write(ea, val);
+                  a_ &= val; SETNZ(a_);
+                  break;
+              case OP_SRE:
+                  val = Read(ea); fC_ = val & 1; val >>= 1; Write(ea, val);
+                  a_ ^= val; SETNZ(a_);
+                  break;
+              case OP_RRA:
+                  val = Read(ea); t = (u32)((val >> 1) | (fC_ << 7)); fC_ = val & 1; val = (u8)t; Write(ea, val);
+                  AdcCore(this, val); SETNZ(a_);
+                  break;
+              default: break;
+              }
+              return cyc;
+
+          branch:
+              ++cyc;
+              if ((pc_ & 0xFF00) != (ea & 0xFF00)) ++cyc;
+              pc_ = ea;
+              return cyc;
+          }
+
+          }  // namespace nes
+          VNES_EOF
+          mkdir -p symbian/core
+          cat > symbian/core/nes_cpu_table.h <<'VNES_EOF'
+          // Generated by tools/gen_cpu_table.py - do not edit
+          #ifndef NES_CPU_TABLE_H
+          #define NES_CPU_TABLE_H
+          namespace nes {
+          enum CpuOp {
+              OP_ADC, OP_AND, OP_ASL, OP_BCC, OP_BCS, OP_BEQ, OP_BIT, OP_BMI, OP_BNE, OP_BPL, OP_BRK, OP_BVC, OP_BVS, OP_CLC, OP_CLD, OP_CLI, OP_CLV, OP_CMP, OP_CPX, OP_CPY, OP_DCP, OP_DEC, OP_DEX, OP_DEY, OP_EOR, OP_INC, OP_INX, OP_INY, OP_ISB, OP_JMP, OP_JSR, OP_LAX, OP_LDA, OP_LDX, OP_LDY, OP_LSR, OP_NOP, OP_ORA, OP_PHA, OP_PHP, OP_PLA, OP_PLP, OP_RLA, OP_ROL, OP_ROR, OP_RRA, OP_RTI, OP_RTS, OP_SAX, OP_SBC, OP_SEC, OP_SED, OP_SEI, OP_SLO, OP_SRE, OP_STA, OP_STX, OP_STY, OP_TAX, OP_TAY, OP_TSX, OP_TXA, OP_TXS, OP_TYA,
+              OP_COUNT };
+          enum CpuMode { AM_IMP, AM_ACC, AM_IMM, AM_ZP, AM_ZPX, AM_ZPY, AM_ABS, AM_ABX, AM_ABY, AM_IND, AM_IZX, AM_IZY, AM_REL };
+          struct OpInfo { unsigned char op, mode, penalty; };
+          static const OpInfo kOpTable[256] = {
+              {OP_BRK, AM_IMP, 0},
+              {OP_ORA, AM_IZX, 0},
+              {OP_NOP, AM_IMP, 0},
+              {OP_SLO, AM_IZX, 0},
+              {OP_NOP, AM_ZP, 0},
+              {OP_ORA, AM_ZP, 0},
+              {OP_ASL, AM_ZP, 0},
+              {OP_SLO, AM_ZP, 0},
+              {OP_PHP, AM_IMP, 0},
+              {OP_ORA, AM_IMM, 0},
+              {OP_ASL, AM_ACC, 0},
+              {OP_NOP, AM_IMM, 0},
+              {OP_NOP, AM_ABS, 0},
+              {OP_ORA, AM_ABS, 0},
+              {OP_ASL, AM_ABS, 0},
+              {OP_SLO, AM_ABS, 0},
+              {OP_BPL, AM_REL, 0},
+              {OP_ORA, AM_IZY, 1},
+              {OP_NOP, AM_IMP, 0},
+              {OP_SLO, AM_IZY, 0},
+              {OP_NOP, AM_ZPX, 0},
+              {OP_ORA, AM_ZPX, 0},
+              {OP_ASL, AM_ZPX, 0},
+              {OP_SLO, AM_ZPX, 0},
+              {OP_CLC, AM_IMP, 0},
+              {OP_ORA, AM_ABY, 1},
+              {OP_NOP, AM_IMP, 0},
+              {OP_SLO, AM_ABY, 0},
+              {OP_NOP, AM_ABX, 1},
+              {OP_ORA, AM_ABX, 1},
+              {OP_ASL, AM_ABX, 0},
+              {OP_SLO, AM_ABX, 0},
+              {OP_JSR, AM_ABS, 0},
+              {OP_AND, AM_IZX, 0},
+              {OP_NOP, AM_IMP, 0},
+              {OP_RLA, AM_IZX, 0},
+              {OP_BIT, AM_ZP, 0},
+              {OP_AND, AM_ZP, 0},
+              {OP_ROL, AM_ZP, 0},
+              {OP_RLA, AM_ZP, 0},
+              {OP_PLP, AM_IMP, 0},
+              {OP_AND, AM_IMM, 0},
+              {OP_ROL, AM_ACC, 0},
+              {OP_NOP, AM_IMM, 0},
+              {OP_BIT, AM_ABS, 0},
+              {OP_AND, AM_ABS, 0},
+              {OP_ROL, AM_ABS, 0},
+              {OP_RLA, AM_ABS, 0},
+              {OP_BMI, AM_REL, 0},
+              {OP_AND, AM_IZY, 1},
+              {OP_NOP, AM_IMP, 0},
+              {OP_RLA, AM_IZY, 0},
+              {OP_NOP, AM_ZPX, 0},
+              {OP_AND, AM_ZPX, 0},
+              {OP_ROL, AM_ZPX, 0},
+              {OP_RLA, AM_ZPX, 0},
+              {OP_SEC, AM_IMP, 0},
+              {OP_AND, AM_ABY, 1},
+              {OP_NOP, AM_IMP, 0},
+              {OP_RLA, AM_ABY, 0},
+              {OP_NOP, AM_ABX, 1},
+              {OP_AND, AM_ABX, 1},
+              {OP_ROL, AM_ABX, 0},
+              {OP_RLA, AM_ABX, 0},
+              {OP_RTI, AM_IMP, 0},
+              {OP_EOR, AM_IZX, 0},
+              {OP_NOP, AM_IMP, 0},
+              {OP_SRE, AM_IZX, 0},
+              {OP_NOP, AM_ZP, 0},
+              {OP_EOR, AM_ZP, 0},
+              {OP_LSR, AM_ZP, 0},
+              {OP_SRE, AM_ZP, 0},
+              {OP_PHA, AM_IMP, 0},
+              {OP_EOR, AM_IMM, 0},
+              {OP_LSR, AM_ACC, 0},
+              {OP_NOP, AM_IMM, 0},
+              {OP_JMP, AM_ABS, 0},
+              {OP_EOR, AM_ABS, 0},
+              {OP_LSR, AM_ABS, 0},
+              {OP_SRE, AM_ABS, 0},
+              {OP_BVC, AM_REL, 0},
+              {OP_EOR, AM_IZY, 1},
+              {OP_NOP, AM_IMP, 0},
+              {OP_SRE, AM_IZY, 0},
+              {OP_NOP, AM_ZPX, 0},
+              {OP_EOR, AM_ZPX, 0},
+              {OP_LSR, AM_ZPX, 0},
+              {OP_SRE, AM_ZPX, 0},
+              {OP_CLI, AM_IMP, 0},
+              {OP_EOR, AM_ABY, 1},
+              {OP_NOP, AM_IMP, 0},
+              {OP_SRE, AM_ABY, 0},
+              {OP_NOP, AM_ABX, 1},
+              {OP_EOR, AM_ABX, 1},
+              {OP_LSR, AM_ABX, 0},
+              {OP_SRE, AM_ABX, 0},
+              {OP_RTS, AM_IMP, 0},
+              {OP_ADC, AM_IZX, 0},
+              {OP_NOP, AM_IMP, 0},
+              {OP_RRA, AM_IZX, 0},
+              {OP_NOP, AM_ZP, 0},
+              {OP_ADC, AM_ZP, 0},
+              {OP_ROR, AM_ZP, 0},
+              {OP_RRA, AM_ZP, 0},
+              {OP_PLA, AM_IMP, 0},
+              {OP_ADC, AM_IMM, 0},
+              {OP_ROR, AM_ACC, 0},
+              {OP_NOP, AM_IMM, 0},
+              {OP_JMP, AM_IND, 0},
+              {OP_ADC, AM_ABS, 0},
+              {OP_ROR, AM_ABS, 0},
+              {OP_RRA, AM_ABS, 0},
+              {OP_BVS, AM_REL, 0},
+              {OP_ADC, AM_IZY, 1},
+              {OP_NOP, AM_IMP, 0},
+              {OP_RRA, AM_IZY, 0},
+              {OP_NOP, AM_ZPX, 0},
+              {OP_ADC, AM_ZPX, 0},
+              {OP_ROR, AM_ZPX, 0},
+              {OP_RRA, AM_ZPX, 0},
+              {OP_SEI, AM_IMP, 0},
+              {OP_ADC, AM_ABY, 1},
+              {OP_NOP, AM_IMP, 0},
+              {OP_RRA, AM_ABY, 0},
+              {OP_NOP, AM_ABX, 1},
+              {OP_ADC, AM_ABX, 1},
+              {OP_ROR, AM_ABX, 0},
+              {OP_RRA, AM_ABX, 0},
+              {OP_NOP, AM_IMM, 0},
+              {OP_STA, AM_IZX, 0},
+              {OP_NOP, AM_IMM, 0},
+              {OP_SAX, AM_IZX, 0},
+              {OP_STY, AM_ZP, 0},
+              {OP_STA, AM_ZP, 0},
+              {OP_STX, AM_ZP, 0},
+              {OP_SAX, AM_ZP, 0},
+              {OP_DEY, AM_IMP, 0},
+              {OP_NOP, AM_IMM, 0},
+              {OP_TXA, AM_IMP, 0},
+              {OP_NOP, AM_IMM, 0},
+              {OP_STY, AM_ABS, 0},
+              {OP_STA, AM_ABS, 0},
+              {OP_STX, AM_ABS, 0},
+              {OP_SAX, AM_ABS, 0},
+              {OP_BCC, AM_REL, 0},
+              {OP_STA, AM_IZY, 0},
+              {OP_NOP, AM_IMP, 0},
+              {OP_NOP, AM_IZY, 1},
+              {OP_STY, AM_ZPX, 0},
+              {OP_STA, AM_ZPX, 0},
+              {OP_STX, AM_ZPY, 0},
+              {OP_SAX, AM_ZPY, 0},
+              {OP_TYA, AM_IMP, 0},
+              {OP_STA, AM_ABY, 0},
+              {OP_TXS, AM_IMP, 0},
+              {OP_NOP, AM_ABS, 0},
+              {OP_NOP, AM_ABS, 0},
+              {OP_STA, AM_ABX, 0},
+              {OP_NOP, AM_ABS, 0},
+              {OP_NOP, AM_ABS, 0},
+              {OP_LDY, AM_IMM, 0},
+              {OP_LDA, AM_IZX, 0},
+              {OP_LDX, AM_IMM, 0},
+              {OP_LAX, AM_IZX, 0},
+              {OP_LDY, AM_ZP, 0},
+              {OP_LDA, AM_ZP, 0},
+              {OP_LDX, AM_ZP, 0},
+              {OP_LAX, AM_ZP, 0},
+              {OP_TAY, AM_IMP, 0},
+              {OP_LDA, AM_IMM, 0},
+              {OP_TAX, AM_IMP, 0},
+              {OP_NOP, AM_IMM, 0},
+              {OP_LDY, AM_ABS, 0},
+              {OP_LDA, AM_ABS, 0},
+              {OP_LDX, AM_ABS, 0},
+              {OP_LAX, AM_ABS, 0},
+              {OP_BCS, AM_REL, 0},
+              {OP_LDA, AM_IZY, 1},
+              {OP_NOP, AM_IMP, 0},
+              {OP_LAX, AM_IZY, 1},
+              {OP_LDY, AM_ZPX, 0},
+              {OP_LDA, AM_ZPX, 0},
+              {OP_LDX, AM_ZPY, 0},
+              {OP_LAX, AM_ZPY, 0},
+              {OP_CLV, AM_IMP, 0},
+              {OP_LDA, AM_ABY, 1},
+              {OP_TSX, AM_IMP, 0},
+              {OP_NOP, AM_ABS, 0},
+              {OP_LDY, AM_ABX, 1},
+              {OP_LDA, AM_ABX, 1},
+              {OP_LDX, AM_ABY, 1},
+              {OP_LAX, AM_ABY, 1},
+              {OP_CPY, AM_IMM, 0},
+              {OP_CMP, AM_IZX, 0},
+              {OP_NOP, AM_IMM, 0},
+              {OP_DCP, AM_IZX, 0},
+              {OP_CPY, AM_ZP, 0},
+              {OP_CMP, AM_ZP, 0},
+              {OP_DEC, AM_ZP, 0},
+              {OP_DCP, AM_ZP, 0},
+              {OP_INY, AM_IMP, 0},
+              {OP_CMP, AM_IMM, 0},
+              {OP_DEX, AM_IMP, 0},
+              {OP_NOP, AM_IMM, 0},
+              {OP_CPY, AM_ABS, 0},
+              {OP_CMP, AM_ABS, 0},
+              {OP_DEC, AM_ABS, 0},
+              {OP_DCP, AM_ABS, 0},
+              {OP_BNE, AM_REL, 0},
+              {OP_CMP, AM_IZY, 1},
+              {OP_NOP, AM_IMP, 0},
+              {OP_DCP, AM_IZY, 0},
+              {OP_NOP, AM_ZPX, 0},
+              {OP_CMP, AM_ZPX, 0},
+              {OP_DEC, AM_ZPX, 0},
+              {OP_DCP, AM_ZPX, 0},
+              {OP_CLD, AM_IMP, 0},
+              {OP_CMP, AM_ABY, 1},
+              {OP_NOP, AM_IMP, 0},
+              {OP_DCP, AM_ABY, 0},
+              {OP_NOP, AM_ABX, 1},
+              {OP_CMP, AM_ABX, 1},
+              {OP_DEC, AM_ABX, 0},
+              {OP_DCP, AM_ABX, 0},
+              {OP_CPX, AM_IMM, 0},
+              {OP_SBC, AM_IZX, 0},
+              {OP_NOP, AM_IMM, 0},
+              {OP_ISB, AM_IZX, 0},
+              {OP_CPX, AM_ZP, 0},
+              {OP_SBC, AM_ZP, 0},
+              {OP_INC, AM_ZP, 0},
+              {OP_ISB, AM_ZP, 0},
+              {OP_INX, AM_IMP, 0},
+              {OP_SBC, AM_IMM, 0},
+              {OP_NOP, AM_IMP, 0},
+              {OP_SBC, AM_IMM, 0},
+              {OP_CPX, AM_ABS, 0},
+              {OP_SBC, AM_ABS, 0},
+              {OP_INC, AM_ABS, 0},
+              {OP_ISB, AM_ABS, 0},
+              {OP_BEQ, AM_REL, 0},
+              {OP_SBC, AM_IZY, 1},
+              {OP_NOP, AM_IMP, 0},
+              {OP_ISB, AM_IZY, 0},
+              {OP_NOP, AM_ZPX, 0},
+              {OP_SBC, AM_ZPX, 0},
+              {OP_INC, AM_ZPX, 0},
+              {OP_ISB, AM_ZPX, 0},
+              {OP_SED, AM_IMP, 0},
+              {OP_SBC, AM_ABY, 1},
+              {OP_NOP, AM_IMP, 0},
+              {OP_ISB, AM_ABY, 0},
+              {OP_NOP, AM_ABX, 1},
+              {OP_SBC, AM_ABX, 1},
+              {OP_INC, AM_ABX, 0},
+              {OP_ISB, AM_ABX, 0},
+          };
+          static const unsigned char kCycles[256] = {
+              7,6,2,8,3,3,5,5,3,2,2,2,4,4,6,6,
+              2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+              6,6,2,8,3,3,5,5,4,2,2,2,4,4,6,6,
+              2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+              6,6,2,8,3,3,5,5,3,2,2,2,3,4,6,6,
+              2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+              6,6,2,8,3,3,5,5,4,2,2,2,5,4,6,6,
+              2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+              2,6,2,6,3,3,3,3,2,2,2,2,4,4,4,4,
+              2,6,2,6,4,4,4,4,2,5,2,5,5,5,5,5,
+              2,6,2,6,3,3,3,3,2,2,2,2,4,4,4,4,
+              2,5,2,5,4,4,4,4,2,4,2,4,4,4,4,4,
+              2,6,2,8,3,3,5,5,2,2,2,2,4,4,6,6,
+              2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+              2,6,2,8,3,3,5,5,2,2,2,2,4,4,6,6,
+              2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+          };
+          }
+          #endif
+          VNES_EOF
+          mkdir -p symbian/core
+          cat > symbian/core/nes_mapper.cpp <<'VNES_EOF'
+          // nes_mapper.cpp - cartridge mappers.
+          //
+          // Supported: 0 NROM, 1 MMC1, 2 UxROM, 3 CNROM, 4 MMC3, 7 AxROM, 9 MMC2,
+          // 10 MMC4, 11 Color Dreams, 33 Taito TC0190, 34 BNROM/NINA-001, 66 GxROM,
+          // 71 Camerica, 75 VRC1, 79 NINA-03/06, 87, 94, 140, 180.
+          #include "nes.h"
+
+          namespace nes {
+
+          void Nes::Prg8(int slot, u32 bank) {
+              bank %= prgBanks8_;
+              prgPtr_[slot] = prg_ + bank * 0x2000;
+          }
+
+          void Nes::Prg16(int slot, u32 bank) {
+              u32 n = prgBanks8_ >> 1;
+              if (!n) n = 1;
+              bank %= n;
+              Prg8(slot * 2, bank * 2);
+              Prg8(slot * 2 + 1, bank * 2 + 1);
+          }
+
+          void Nes::Prg32(u32 bank) {
+              u32 n = prgBanks8_ >> 2;
+              if (!n) n = 1;
+              bank %= n;
+              for (int i = 0; i < 4; ++i) Prg8(i, bank * 4 + i);
+          }
+
+          void Nes::Chr1(int slot, u32 bank) {
+              bank %= chrBanks1_;
+              chrPtr_[slot] = chr_ + bank * 0x400;
+          }
+          void Nes::Chr2(int slot, u32 bank) { Chr1(slot, bank * 2); Chr1(slot + 1, bank * 2 + 1); }
+          void Nes::Chr4(int slot, u32 bank) { for (int i = 0; i < 4; ++i) Chr1(slot + i, bank * 4 + i); }
+          void Nes::Chr8(u32 bank) { for (int i = 0; i < 8; ++i) Chr1(i, bank * 8 + i); }
+
+          // ---- MMC1 ----
+          void Nes::Mmc1Sync() {
+              u32 ctrl = mreg_[0], chr0 = mreg_[1], chr1 = mreg_[2], prg = mreg_[3];
+              switch (ctrl & 3) {
+              case 0: SetMirroring(kMirrorSingle0); break;
+              case 1: SetMirroring(kMirrorSingle1); break;
+              case 2: SetMirroring(kMirrorVert); break;
+              default: SetMirroring(kMirrorHoriz); break;
+              }
+              switch ((ctrl >> 2) & 3) {
+              case 0: case 1: Prg32((prg & 0xE) >> 1); break;
+              case 2: Prg16(0, 0); Prg16(1, prg & 0xF); break;
+              default: Prg16(0, prg & 0xF); Prg16(1, (prgBanks8_ >> 1) - 1); break;
+              }
+              if (ctrl & 0x10) { Chr4(0, chr0); Chr4(4, chr1); }
+              else Chr8(chr0 >> 1);
+          }
+
+          // ---- MMC3 ----
+          void Nes::Mmc3Sync() {
+              u32 sel = mreg_[0];
+              u32 r0 = mreg_[1], r1 = mreg_[2];
+              if (sel & 0x80) {
+                  Chr1(4, r0 & ~1u); Chr1(5, r0 | 1); Chr1(6, r1 & ~1u); Chr1(7, r1 | 1);
+                  Chr1(0, mreg_[3]); Chr1(1, mreg_[4]); Chr1(2, mreg_[5]); Chr1(3, mreg_[6]);
+              } else {
+                  Chr1(0, r0 & ~1u); Chr1(1, r0 | 1); Chr1(2, r1 & ~1u); Chr1(3, r1 | 1);
+                  Chr1(4, mreg_[3]); Chr1(5, mreg_[4]); Chr1(6, mreg_[5]); Chr1(7, mreg_[6]);
+              }
+              u32 last = prgBanks8_ - 1;
+              if (sel & 0x40) {
+                  Prg8(0, last - 1); Prg8(1, mreg_[8]); Prg8(2, mreg_[7]); Prg8(3, last);
+              } else {
+                  Prg8(0, mreg_[7]); Prg8(1, mreg_[8]); Prg8(2, last - 1); Prg8(3, last);
+              }
+          }
+
+          // ---- MMC2 / MMC4 ----
+          void Nes::Mmc2Sync() {
+              Chr4(0, mm9_sel_[0][mm9_latch_[0]]);
+              Chr4(4, mm9_sel_[1][mm9_latch_[1]]);
+          }
+
+          void Nes::MapperPpuFetch(u16 addr) {
+              u32 side = (addr >> 12) & 1;
+              u32 lo = addr & 0x0FF8;
+              u8 nl;
+              if (lo == 0x0FD8) nl = 0;
+              else if (lo == 0x0FE8) nl = 1;
+              else return;
+              if (mm9_latch_[side] != nl) {
+                  mm9_latch_[side] = nl;
+                  Mmc2Sync();
+              }
+          }
+
+          void Nes::MapperInit() {
+              for (int i = 0; i < 16; ++i) mreg_[i] = 0;
+              mm1_shift_ = 0x10; mm1_count_ = 0;
+              mm3_irqLatch_ = mm3_irqCounter_ = mm3_irqEnable_ = mm3_irqReload_ = 0;
+              mm9_latch_[0] = mm9_latch_[1] = 1;
+              mm9_sel_[0][0] = mm9_sel_[0][1] = mm9_sel_[1][0] = mm9_sel_[1][1] = 0;
+              mapIrq_ = 0;
+              const u32 last16 = (prgBanks8_ >> 1) ? (prgBanks8_ >> 1) - 1 : 0;
+              SetMirroring(mirrorMode_);
+              Prg32(0);
+              Chr8(0);
+              switch (mapperId_) {
+              case 1: mreg_[0] = 0x0C; Mmc1Sync(); break;
+              case 2: case 94: Prg16(0, 0); Prg16(1, last16); break;
+              case 180: Prg16(0, 0); Prg16(1, 0); break;
+              case 4:
+                  mreg_[1] = 0; mreg_[2] = 2; mreg_[3] = 4; mreg_[4] = 5; mreg_[5] = 6; mreg_[6] = 7;
+                  mreg_[7] = 0; mreg_[8] = 1;
+                  Mmc3Sync();
+                  break;
+              case 9: Prg8(0, 0); Prg8(1, prgBanks8_ - 3); Prg8(2, prgBanks8_ - 2); Prg8(3, prgBanks8_ - 1); Mmc2Sync(); break;
+              case 10: Prg16(0, 0); Prg16(1, last16); Mmc2Sync(); break;
+              case 71: Prg16(0, 0); Prg16(1, last16); break;
+              case 33: case 75:
+                  Prg8(0, 0); Prg8(1, 1); Prg8(2, prgBanks8_ - 2); Prg8(3, prgBanks8_ - 1);
+                  break;
+              default: break;
+              }
+          }
+
+          void Nes::MapperWriteLow(u16 a, u8 v) {
+              switch (mapperId_) {
+              case 34:
+                  if (chrSize_ && !chrIsRam_) {          // NINA-001
+                      if (a == 0x7FFD) Prg32(v);
+                      else if (a == 0x7FFE) Chr4(0, v);
+                      else if (a == 0x7FFF) Chr4(4, v);
+                  }
+                  break;
+              case 79:
+                  if ((a & 0xE100) == 0x4100) { Prg32((v >> 3) & 1); Chr8(v & 7); }
+                  break;
+              case 87:
+                  if (a >= 0x6000) Chr8(((v & 1) << 1) | ((v >> 1) & 1));
+                  break;
+              case 140:
+                  if (a >= 0x6000) { Prg32((v >> 4) & 3); Chr8(v & 0xF); }
+                  break;
+              default: break;
+              }
+          }
+
+          void Nes::MapperWrite(u16 a, u8 v) {
+              switch (mapperId_) {
+              case 1:
+                  if (v & 0x80) {
+                      mm1_shift_ = 0x10; mm1_count_ = 0;
+                      mreg_[0] |= 0x0C;
+                      Mmc1Sync();
+                  } else {
+                      mm1_shift_ = (u8)((mm1_shift_ >> 1) | ((v & 1) << 4));
+                      if (++mm1_count_ == 5) {
+                          mreg_[(a >> 13) & 3] = mm1_shift_ & 0x1F;
+                          mm1_shift_ = 0x10; mm1_count_ = 0;
+                          Mmc1Sync();
+                      }
+                  }
+                  break;
+              case 2: Prg16(0, v); break;
+              case 3: Chr8(v); break;
+              case 4:
+                  switch (a & 0xE001) {
+                  case 0x8000: mreg_[0] = v; Mmc3Sync(); break;
+                  case 0x8001: {
+                      u32 r = mreg_[0] & 7;
+                      if (r == 6 || r == 7) mreg_[1 + r] = v & 0x3F; else mreg_[1 + r] = v;
+                      Mmc3Sync();
+                      break; }
+                  case 0xA000: if (!fourScreen_) SetMirroring((v & 1) ? kMirrorHoriz : kMirrorVert); break;
+                  case 0xA001: break;
+                  case 0xC000: mm3_irqLatch_ = v; break;
+                  case 0xC001: mm3_irqCounter_ = 0; mm3_irqReload_ = 1; break;
+                  case 0xE000: mm3_irqEnable_ = 0; mapIrq_ = 0; break;
+                  default: mm3_irqEnable_ = 1; break;
+                  }
+                  break;
+              case 7:
+                  Prg32(v & 7);
+                  SetMirroring((v & 0x10) ? kMirrorSingle1 : kMirrorSingle0);
+                  break;
+              case 9: case 10:
+                  switch (a & 0xF000) {
+                  case 0xA000: if (mapperId_ == 9) Prg8(0, v & 0xF); else Prg16(0, v & 0xF); break;
+                  case 0xB000: mm9_sel_[0][0] = v & 0x1F; Mmc2Sync(); break;
+                  case 0xC000: mm9_sel_[0][1] = v & 0x1F; Mmc2Sync(); break;
+                  case 0xD000: mm9_sel_[1][0] = v & 0x1F; Mmc2Sync(); break;
+                  case 0xE000: mm9_sel_[1][1] = v & 0x1F; Mmc2Sync(); break;
+                  case 0xF000: SetMirroring((v & 1) ? kMirrorHoriz : kMirrorVert); break;
+                  default: break;
+                  }
+                  break;
+              case 11: Prg32(v & 3); Chr8(v >> 4); break;
+              case 33:
+                  switch (a & 0xA003) {
+                  case 0x8000: Prg8(0, v & 0x3F); SetMirroring((v & 0x40) ? kMirrorHoriz : kMirrorVert); break;
+                  case 0x8001: Prg8(1, v & 0x3F); break;
+                  case 0x8002: Chr2(0, v); break;
+                  case 0x8003: Chr2(2, v); break;
+                  case 0xA000: Chr1(4, v); break;
+                  case 0xA001: Chr1(5, v); break;
+                  case 0xA002: Chr1(6, v); break;
+                  case 0xA003: Chr1(7, v); break;
+                  default: break;
+                  }
+                  break;
+              case 34:
+                  if (!chrSize_ || chrIsRam_) Prg32(v);
+                  break;
+              case 66: Prg32((v >> 4) & 3); Chr8(v & 3); break;
+              case 71:
+                  if (a >= 0xC000) Prg16(0, v);
+                  else if (a >= 0x9000 && a < 0xA000) SetMirroring((v & 0x10) ? kMirrorSingle1 : kMirrorSingle0);
+                  break;
+              case 75:
+                  switch (a & 0xF000) {
+                  case 0x8000: Prg8(0, v & 0xF); break;
+                  case 0x9000:
+                      SetMirroring((v & 1) ? kMirrorHoriz : kMirrorVert);
+                      mreg_[4] = (v & 2) ? 0x10 : 0;
+                      mreg_[5] = (v & 4) ? 0x10 : 0;
+                      Chr4(0, mreg_[0] | mreg_[4]); Chr4(4, mreg_[1] | mreg_[5]);
+                      break;
+                  case 0xA000: Prg8(1, v & 0xF); break;
+                  case 0xC000: Prg8(2, v & 0xF); break;
+                  case 0xE000: mreg_[0] = v & 0xF; Chr4(0, mreg_[0] | mreg_[4]); break;
+                  case 0xF000: mreg_[1] = v & 0xF; Chr4(4, mreg_[1] | mreg_[5]); break;
+                  default: break;
+                  }
+                  break;
+              case 94: Prg16(0, (v >> 2) & 0xF); break;
+              case 180: Prg16(1, v); break;
+              default: break;
+              }
+          }
+
+          void Nes::MapperScanline() {
+              if (mapperId_ != 4) return;
+              if (mm3_irqCounter_ == 0 || mm3_irqReload_) {
+                  mm3_irqCounter_ = mm3_irqLatch_;
+                  mm3_irqReload_ = 0;
+              } else {
+                  --mm3_irqCounter_;
+              }
+              if (mm3_irqCounter_ == 0 && mm3_irqEnable_) mapIrq_ = 1;
+          }
+
+          }  // namespace nes
+          VNES_EOF
+          mkdir -p symbian/core
+          cat > symbian/core/nes_palette.h <<'VNES_EOF'
+          // Generated from vNES src/palettes/ntsc.txt
+          #ifndef NES_PALETTE_H
+          #define NES_PALETTE_H
+          namespace nes {
+          static const unsigned int kNtscPalette[64] = {
+              0x525252, 0x000080, 0x08008A, 0x2C007E, 0x4A004E, 0x500006, 0x440000, 0x260800,
+              0x0A2000, 0x002E00, 0x003200, 0x00260A, 0x001C48, 0x000000, 0x000000, 0x000000,
+              0xA4A4A4, 0x0038CE, 0x3416EC, 0x5E04DC, 0x8C00B0, 0x9A004C, 0x901800, 0x703600,
+              0x4C5400, 0x0E6C00, 0x007400, 0x006C2C, 0x005E84, 0x000000, 0x000000, 0x000000,
+              0xFFFFFF, 0x4C9CFF, 0x7C78FF, 0xA664FF, 0xDA5AFF, 0xF054C0, 0xF06A56, 0xD68610,
+              0xBAA400, 0x76C000, 0x46CC1A, 0x2EC866, 0x34C2BE, 0x3A3A3A, 0x000000, 0x000000,
+              0xFFFFFF, 0xB6DAFF, 0xC8CAFF, 0xDAC2FF, 0xF0BEFF, 0xFCBCEE, 0xFAC2C0, 0xF2CCA2,
+              0xE6DA92, 0xCCE68E, 0xB8EEA2, 0xAEEABE, 0xAEE8E2, 0xB0B0B0, 0x000000, 0x000000,
+          };
+          }
+          #endif
+          VNES_EOF
+          mkdir -p symbian/core
+          cat > symbian/core/nes_ppu.cpp <<'VNES_EOF'
+          // nes_ppu.cpp - scanline-based PPU.
+          //
+          // Each visible line is rendered in one go at its start from the current
+          // v/t registers.  CPU time for the line then runs in three slices (up to the
+          // sprite-0 hit, up to dot 257 where the scroll registers are reloaded, and the
+          // remainder) so that split-screen effects behave like the hardware.
+          #include "nes.h"
+          #include "nes_palette.h"
+
+          namespace nes {
+
+          void Nes::PpuReset() {
+              ppuCtrl_ = ppuMask_ = ppuStatus_ = oamAddr_ = ppuBuf_ = ppuLatch_ = 0;
+              v_ = t_ = 0;
+              fineX_ = w_ = 0;
+              s0HitX_ = -1;
+              for (int i = 0; i < 64; ++i) pal32_[i] = kNtscPalette[i];
+              MemFill(oam_, 0, sizeof(oam_));
+              MemFill(palRam_, 0x0F, sizeof(palRam_));
+              UpdatePalOut();
+          }
+
+          void Nes::UpdatePalOut() {
+              u32 mask = (ppuMask_ & 1) ? 0x30 : 0x3F;
+              int emph = (ppuMask_ >> 5) & 7;
+              for (int i = 0; i < 32; ++i) {
+                  u32 c = pal32_[palRam_[i] & mask];
+                  if (emph) {
+                      u32 r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, b = c & 0xFF;
+                      // emphasised channel stays, the others are attenuated (~75 %)
+                      if (!(emph & 1)) r = (r * 3) >> 2;
+                      if (!(emph & 2)) g = (g * 3) >> 2;
+                      if (!(emph & 4)) b = (b * 3) >> 2;
+                      c = (r << 16) | (g << 8) | b;
+                  }
+                  palOut_[i] = c;
+              }
+          }
+
+          void Nes::SetMirroring(int mode) {
+              mirrorMode_ = (u8)mode;
+              switch (mode) {
+              case kMirrorHoriz: ntPtr_[0] = vram_; ntPtr_[1] = vram_; ntPtr_[2] = vram_ + 0x400; ntPtr_[3] = vram_ + 0x400; break;
+              case kMirrorVert: ntPtr_[0] = vram_; ntPtr_[1] = vram_ + 0x400; ntPtr_[2] = vram_; ntPtr_[3] = vram_ + 0x400; break;
+              case kMirrorSingle0: ntPtr_[0] = ntPtr_[1] = ntPtr_[2] = ntPtr_[3] = vram_; break;
+              case kMirrorSingle1: ntPtr_[0] = ntPtr_[1] = ntPtr_[2] = ntPtr_[3] = vram_ + 0x400; break;
+              default: ntPtr_[0] = vram_; ntPtr_[1] = vram_ + 0x400; ntPtr_[2] = vram_ + 0x800; ntPtr_[3] = vram_ + 0xC00; break;
+              }
+          }
+
+          u8 Nes::PpuRead(u16 addr) {
+              addr &= 0x3FFF;
+              if (addr < 0x2000) return chrPtr_[(addr >> 10) & 7][addr & 0x3FF];
+              if (addr < 0x3F00) return ntPtr_[(addr >> 10) & 3][addr & 0x3FF];
+              u32 i = addr & 0x1F;
+              if ((i & 3) == 0) i &= 0x0F;
+              return palRam_[i];
+          }
+
+          void Nes::PpuWriteMem(u16 addr, u8 val) {
+              addr &= 0x3FFF;
+              if (addr < 0x2000) {
+                  if (chrIsRam_) chrPtr_[(addr >> 10) & 7][addr & 0x3FF] = val;
+              } else if (addr < 0x3F00) {
+                  ntPtr_[(addr >> 10) & 3][addr & 0x3FF] = val;
+              } else {
+                  u32 i = addr & 0x1F;
+                  if ((i & 3) == 0) i &= 0x0F;
+                  palRam_[i] = (u8)(val & 0x3F);
+                  UpdatePalOut();
+              }
+          }
+
+          void Nes::PpuWrite(u16 reg, u8 val) {
+              ppuLatch_ = val;
+              switch (reg & 7) {
+              case 0: {
+                  u8 old = ppuCtrl_;
+                  ppuCtrl_ = val;
+                  t_ = (u16)((t_ & 0xF3FF) | ((val & 3) << 10));
+                  if (!(old & 0x80) && (val & 0x80) && (ppuStatus_ & 0x80)) nmiPending_ = 1;
+                  break; }
+              case 1: ppuMask_ = val; UpdatePalOut(); break;
+              case 3: oamAddr_ = val; break;
+              case 4: oam_[oamAddr_++] = val; break;
+              case 5:
+                  if (!w_) { t_ = (u16)((t_ & 0xFFE0) | (val >> 3)); fineX_ = val & 7; w_ = 1; }
+                  else { t_ = (u16)((t_ & 0x8C1F) | ((val & 7) << 12) | ((val & 0xF8) << 2)); w_ = 0; }
+                  break;
+              case 6:
+                  if (!w_) { t_ = (u16)((t_ & 0x00FF) | ((val & 0x3F) << 8)); w_ = 1; }
+                  else { t_ = (u16)((t_ & 0xFF00) | val); v_ = t_; w_ = 0; }
+                  break;
+              case 7:
+                  PpuWriteMem(v_, val);
+                  v_ = (u16)((v_ + ((ppuCtrl_ & 4) ? 32 : 1)) & 0x7FFF);
+                  break;
+              default: break;
+              }
+          }
+
+          u8 Nes::PpuReadReg(u16 reg) {
+              u8 r;
+              switch (reg & 7) {
+              case 2:
+                  r = (u8)((ppuStatus_ & 0xE0) | (ppuLatch_ & 0x1F));
+                  ppuStatus_ &= 0x7F;
+                  w_ = 0;
+                  ppuLatch_ = r;
+                  return r;
+              case 4: return oam_[oamAddr_];
+              case 7: {
+                  u16 addr = (u16)(v_ & 0x3FFF);
+                  if (addr >= 0x3F00) {
+                      r = PpuRead(addr);
+                      ppuBuf_ = PpuRead((u16)(addr - 0x1000));
+                  } else {
+                      r = ppuBuf_;
+                      ppuBuf_ = PpuRead(addr);
+                  }
+                  v_ = (u16)((v_ + ((ppuCtrl_ & 4) ? 32 : 1)) & 0x7FFF);
+                  ppuLatch_ = r;
+                  return r; }
+              default: return ppuLatch_;
+              }
+          }
+
+          void Nes::FillBackdrop(int y) {
+              u32* dst = fb_ + y * kScreenW;
+              u32 c = palOut_[0];
+              for (int x = 0; x < kScreenW; ++x) dst[x] = c;
+          }
+
+          void Nes::IncV() {
+              if ((v_ & 0x7000) != 0x7000) {
+                  v_ = (u16)(v_ + 0x1000);
+              } else {
+                  v_ &= 0x8FFF;
+                  u32 cy = (v_ & 0x03E0) >> 5;
+                  if (cy == 29) { cy = 0; v_ ^= 0x0800; }
+                  else if (cy == 31) cy = 0;
+                  else ++cy;
+                  v_ = (u16)((v_ & ~0x03E0) | (cy << 5));
+              }
+          }
+
+          void Nes::EndLineScroll(int line) {
+              if (!Rendering() || (line >= 240 && line != 261)) return;
+              if (line < 240) IncV();
+              v_ = (u16)((v_ & 0xFBE0) | (t_ & 0x041F));
+              if (line == 261) v_ = (u16)((v_ & 0x841F) | (t_ & 0x7BE0));
+          }
+
+          void Nes::RenderLine(int y, bool render) {
+              const bool bgOn = (ppuMask_ & 0x08) != 0;
+              const bool sprOn = (ppuMask_ & 0x10) != 0;
+              s0HitX_ = -1;
+              if (!bgOn && !sprOn) {
+                  if (render) FillBackdrop(y);
+                  return;
+              }
+              const bool mmc2 = (mapperId_ == 9 || mapperId_ == 10);
+
+              // ---- background ----
+              if (bgOn) {
+                  u32 cx = v_ & 31, cy = (v_ >> 5) & 31, nt = (v_ >> 10) & 3, fy = (v_ >> 12) & 7;
+                  const u32 base = (ppuCtrl_ & 0x10) ? 0x1000 : 0;
+                  u8* out = lineBg_;
+                  for (int tile = 0; tile < 33; ++tile) {
+                      const u8* ntp = ntPtr_[nt];
+                      u32 idx = ntp[(cy << 5) | cx];
+                      u32 at = ntp[0x3C0 | ((cy >> 2) << 3) | (cx >> 2)];
+                      u32 pbits = ((at >> (((cy & 2) << 1) | (cx & 2))) & 3) << 2;
+                      u32 pa = base + idx * 16 + fy;
+                      const u8* cp = chrPtr_[pa >> 10] + (pa & 0x3FF);
+                      u32 lo = cp[0], hi = cp[8];
+                      if (mmc2) MapperPpuFetch((u16)(pa + 8));
+                      if ((lo | hi) == 0) {
+                          out[0] = out[1] = out[2] = out[3] = out[4] = out[5] = out[6] = out[7] = 0;
+                      } else {
+                          for (int b = 0; b < 8; ++b) {
+                              u32 sh = 7 - b;
+                              u32 pix = ((lo >> sh) & 1) | (((hi >> sh) & 1) << 1);
+                              out[b] = (u8)(pix ? (pbits | pix) : 0);
+                          }
+                      }
+                      out += 8;
+                      if (++cx == 32) { cx = 0; nt ^= 1; }
+                  }
+              } else {
+                  MemFill(lineBg_, 0, 264);
+              }
+
+              // ---- sprites ----
+              MemFill(lineSpr_, 0, 264);
+              if (sprOn) {
+                  const int h = (ppuCtrl_ & 0x20) ? 16 : 8;
+                  int count = 0;
+                  for (int i = 0; i < 64; ++i) {
+                      const u8* o = oam_ + i * 4;
+                      int row = y - (o[0] + 1);
+                      if (row < 0 || row >= h) continue;
+                      if (++count > 8) { ppuStatus_ |= 0x20; break; }
+                      u32 tile = o[1];
+                      u8 attr = o[2];
+                      int sx = o[3];
+                      if (attr & 0x80) row = h - 1 - row;
+                      u32 pa;
+                      if (h == 8) pa = ((ppuCtrl_ & 8) ? 0x1000 : 0) + tile * 16 + row;
+                      else pa = ((tile & 1) ? 0x1000 : 0) + (tile & 0xFE) * 16 + (row & 7) + ((row & 8) ? 16 : 0);
+                      const u8* cp = chrPtr_[pa >> 10] + (pa & 0x3FF);
+                      u32 lo = cp[0], hi = cp[8];
+                      if (mmc2) MapperPpuFetch((u16)(pa + 8));
+                      if ((lo | hi) == 0) continue;
+                      u32 flags = 0x10 | ((attr & 3) << 2) | ((attr & 0x20) ? 0x20 : 0) | (i == 0 ? 0x40 : 0);
+                      for (int b = 0; b < 8; ++b) {
+                          int x = sx + b;
+                          if (x > 255) break;
+                          u32 sh = (attr & 0x40) ? b : 7 - b;
+                          u32 pix = ((lo >> sh) & 1) | (((hi >> sh) & 1) << 1);
+                          if (!pix || lineSpr_[x]) continue;
+                          lineSpr_[x] = (u8)(flags | pix);
+                      }
+                  }
+              }
+
+              // ---- compose ----
+              const bool bgLeft = (ppuMask_ & 2) != 0, sprLeft = (ppuMask_ & 4) != 0;
+              const u8* bg = lineBg_ + fineX_;
+              u32* dst = fb_ + y * kScreenW;
+              for (int x = 0; x < 256; ++x) {
+                  u32 b = bg[x];
+                  u32 s = lineSpr_[x];
+                  if (x < 8) {
+                      if (!bgLeft) b = 0;
+                      if (!sprLeft) s = 0;
+                  }
+                  u32 ci;
+                  if (!s) {
+                      ci = b;
+                  } else {
+                      if ((s & 0x40) && b && x != 255 && s0HitX_ < 0) s0HitX_ = x;
+                      if (!b) ci = s & 0x1F;
+                      else ci = (s & 0x20) ? b : (s & 0x1F);
+                  }
+                  if (render) dst[x] = palOut_[ci];
+              }
+          }
+
+          void Nes::RunScanline(int line, bool render) {
+              if (line == 241) {
+                  ppuStatus_ |= 0x80;
+                  if (ppuCtrl_ & 0x80) nmiPending_ = 1;
+              } else if (line == 261) {
+                  ppuStatus_ &= 0x1F;
+              }
+              s0HitX_ = -1;
+              if (line < 240) RenderLine(line, render);
+
+              s32 pos = 0;
+              if (s0HitX_ >= 0) {
+                  s32 d = s0HitX_ + 2;
+                  CpuRun(d - pos);
+                  pos = d;
+                  ppuStatus_ |= 0x40;
+              }
+              CpuRun(257 - pos);
+              EndLineScroll(line);
+              if (Rendering() && (line < 240 || line == 261)) MapperScanline();
+              CpuRun(341 - 257);
+              ApuRunLine(341);
+          }
+
+          }  // namespace nes
+          VNES_EOF
+          mkdir -p symbian/tools
+          cat > symbian/tools/gen_cpu_table.py <<'VNES_EOF'
+          #!/usr/bin/env python3
+          """Generates core/nes_cpu_table.h: 6502 opcode -> (op, addressing mode, page-cross-penalty)."""
+          import sys
+          modes = ["IMP","ACC","IMM","ZP","ZPX","ZPY","ABS","ABX","ABY","IND","IZX","IZY","REL"]
+          M = {m:i for i,m in enumerate(modes)}
+          ops = {}
+          def add(name, **kw):
+              for mode, code in kw.items():
+                  ops.setdefault(name, {})[mode.upper()] = code
+          rw = lambda name, imm, zp, zpx, abs_, abx, aby, izx, izy: add(name, IMM=imm, ZP=zp, ZPX=zpx, ABS=abs_, ABX=abx, ABY=aby, IZX=izx, IZY=izy)
+          add("ADC", IMM=0x69, ZP=0x65, ZPX=0x75, ABS=0x6D, ABX=0x7D, ABY=0x79, IZX=0x61, IZY=0x71)
+          add("AND", IMM=0x29, ZP=0x25, ZPX=0x35, ABS=0x2D, ABX=0x3D, ABY=0x39, IZX=0x21, IZY=0x31)
+          add("ASL", ACC=0x0A, ZP=0x06, ZPX=0x16, ABS=0x0E, ABX=0x1E)
+          add("BCC", REL=0x90); add("BCS", REL=0xB0); add("BEQ", REL=0xF0); add("BMI", REL=0x30)
+          add("BNE", REL=0xD0); add("BPL", REL=0x10); add("BVC", REL=0x50); add("BVS", REL=0x70)
+          add("BIT", ZP=0x24, ABS=0x2C); add("BRK", IMP=0x00)
+          add("CLC", IMP=0x18); add("CLD", IMP=0xD8); add("CLI", IMP=0x58); add("CLV", IMP=0xB8)
+          add("CMP", IMM=0xC9, ZP=0xC5, ZPX=0xD5, ABS=0xCD, ABX=0xDD, ABY=0xD9, IZX=0xC1, IZY=0xD1)
+          add("CPX", IMM=0xE0, ZP=0xE4, ABS=0xEC); add("CPY", IMM=0xC0, ZP=0xC4, ABS=0xCC)
+          add("DEC", ZP=0xC6, ZPX=0xD6, ABS=0xCE, ABX=0xDE); add("DEX", IMP=0xCA); add("DEY", IMP=0x88)
+          add("EOR", IMM=0x49, ZP=0x45, ZPX=0x55, ABS=0x4D, ABX=0x5D, ABY=0x59, IZX=0x41, IZY=0x51)
+          add("INC", ZP=0xE6, ZPX=0xF6, ABS=0xEE, ABX=0xFE); add("INX", IMP=0xE8); add("INY", IMP=0xC8)
+          add("JMP", ABS=0x4C, IND=0x6C); add("JSR", ABS=0x20)
+          add("LDA", IMM=0xA9, ZP=0xA5, ZPX=0xB5, ABS=0xAD, ABX=0xBD, ABY=0xB9, IZX=0xA1, IZY=0xB1)
+          add("LDX", IMM=0xA2, ZP=0xA6, ZPY=0xB6, ABS=0xAE, ABY=0xBE)
+          add("LDY", IMM=0xA0, ZP=0xA4, ZPX=0xB4, ABS=0xAC, ABX=0xBC)
+          add("LSR", ACC=0x4A, ZP=0x46, ZPX=0x56, ABS=0x4E, ABX=0x5E)
+          add("NOP", IMP=0xEA)
+          add("ORA", IMM=0x09, ZP=0x05, ZPX=0x15, ABS=0x0D, ABX=0x1D, ABY=0x19, IZX=0x01, IZY=0x11)
+          add("PHA", IMP=0x48); add("PHP", IMP=0x08); add("PLA", IMP=0x68); add("PLP", IMP=0x28)
+          add("ROL", ACC=0x2A, ZP=0x26, ZPX=0x36, ABS=0x2E, ABX=0x3E)
+          add("ROR", ACC=0x6A, ZP=0x66, ZPX=0x76, ABS=0x6E, ABX=0x7E)
+          add("RTI", IMP=0x40); add("RTS", IMP=0x60)
+          add("SBC", IMM=0xE9, ZP=0xE5, ZPX=0xF5, ABS=0xED, ABX=0xFD, ABY=0xF9, IZX=0xE1, IZY=0xF1)
+          add("SEC", IMP=0x38); add("SED", IMP=0xF8); add("SEI", IMP=0x78)
+          add("STA", ZP=0x85, ZPX=0x95, ABS=0x8D, ABX=0x9D, ABY=0x99, IZX=0x81, IZY=0x91)
+          add("STX", ZP=0x86, ZPY=0x96, ABS=0x8E); add("STY", ZP=0x84, ZPX=0x94, ABS=0x8C)
+          add("TAX", IMP=0xAA); add("TAY", IMP=0xA8); add("TSX", IMP=0xBA); add("TXA", IMP=0x8A)
+          add("TXS", IMP=0x9A); add("TYA", IMP=0x98)
+          # unofficial
+          add("LAX", ZP=0xA7, ZPY=0xB7, ABS=0xAF, ABY=0xBF, IZX=0xA3, IZY=0xB3)
+          add("SAX", ZP=0x87, ZPY=0x97, ABS=0x8F, IZX=0x83)
+          add("DCP", ZP=0xC7, ZPX=0xD7, ABS=0xCF, ABX=0xDF, ABY=0xDB, IZX=0xC3, IZY=0xD3)
+          add("ISB", ZP=0xE7, ZPX=0xF7, ABS=0xEF, ABX=0xFF, ABY=0xFB, IZX=0xE3, IZY=0xF3)
+          add("SLO", ZP=0x07, ZPX=0x17, ABS=0x0F, ABX=0x1F, ABY=0x1B, IZX=0x03, IZY=0x13)
+          add("RLA", ZP=0x27, ZPX=0x37, ABS=0x2F, ABX=0x3F, ABY=0x3B, IZX=0x23, IZY=0x33)
+          add("SRE", ZP=0x47, ZPX=0x57, ABS=0x4F, ABX=0x5F, ABY=0x5B, IZX=0x43, IZY=0x53)
+          add("RRA", ZP=0x67, ZPX=0x77, ABS=0x6F, ABX=0x7F, ABY=0x7B, IZX=0x63, IZY=0x73)
+          ops.setdefault("SBC", {})["IMM2"] = 0xEB
+          add("NOPU", IMP=0x1A)  # placeholder, filled below
+
+          table = {}
+          for name, d in ops.items():
+              if name == "NOPU": continue
+              for mode, code in d.items():
+                  m = "IMM" if mode == "IMM2" else mode
+                  assert code not in table, hex(code)
+                  table[code] = (name, m)
+          # unofficial NOPs
+          for c in (0x1A,0x3A,0x5A,0x7A,0xDA,0xFA): table[c] = ("NOP","IMP")
+          for c in (0x80,0x82,0x89,0xC2,0xE2): table[c] = ("NOP","IMM")
+          for c in (0x04,0x44,0x64): table[c] = ("NOP","ZP")
+          for c in (0x14,0x34,0x54,0x74,0xD4,0xF4): table[c] = ("NOP","ZPX")
+          table[0x0C] = ("NOP","ABS")
+          for c in (0x1C,0x3C,0x5C,0x7C,0xDC,0xFC): table[c] = ("NOP","ABX")
+          # remaining undocumented opcodes: treated as NOP (immediate-sized where applicable)
+          for c in (0x0B,0x2B,0x4B,0x6B,0x8B,0xAB,0xCB): table[c] = ("NOP","IMM")
+          for c in range(256):
+              if c not in table:
+                  table[c] = ("NOP", "ABS" if c in (0x9C,0x9E,0x9B,0x9F,0xBB) else ("IZY" if c==0x93 else "IMP"))
+          opnames = sorted({n for n,_ in table.values()})
+          penalty_ops = {"ADC","AND","CMP","EOR","LDA","LDX","LDY","ORA","SBC","LAX","NOP"}
+          out = ["// Generated by tools/gen_cpu_table.py - do not edit", "#ifndef NES_CPU_TABLE_H", "#define NES_CPU_TABLE_H", "namespace nes {", "enum CpuOp {"]
+          out.append("    " + ", ".join("OP_"+n for n in opnames) + ",")
+          out.append("    OP_COUNT };")
+          out.append("enum CpuMode { " + ", ".join("AM_"+m for m in modes) + " };")
+          out.append("struct OpInfo { unsigned char op, mode, penalty; };")
+          out.append("static const OpInfo kOpTable[256] = {")
+          for c in range(256):
+              n, m = table[c]
+              pen = 1 if (n in penalty_ops and m in ("ABX","ABY","IZY")) else 0
+              out.append("    {OP_%s, AM_%s, %d},%s" % (n, m, pen, "" if c%16!=15 else ""))
+          out.append("};")
+          cyc = [7,6,2,8,3,3,5,5,3,2,2,2,4,4,6,6, 2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+                 6,6,2,8,3,3,5,5,4,2,2,2,4,4,6,6, 2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+                 6,6,2,8,3,3,5,5,3,2,2,2,3,4,6,6, 2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+                 6,6,2,8,3,3,5,5,4,2,2,2,5,4,6,6, 2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+                 2,6,2,6,3,3,3,3,2,2,2,2,4,4,4,4, 2,6,2,6,4,4,4,4,2,5,2,5,5,5,5,5,
+                 2,6,2,6,3,3,3,3,2,2,2,2,4,4,4,4, 2,5,2,5,4,4,4,4,2,4,2,4,4,4,4,4,
+                 2,6,2,8,3,3,5,5,2,2,2,2,4,4,6,6, 2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+                 2,6,2,8,3,3,5,5,2,2,2,2,4,4,6,6, 2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7]
+          assert len(cyc)==256
+          out.append("static const unsigned char kCycles[256] = {")
+          for i in range(0,256,16): out.append("    " + ",".join(str(x) for x in cyc[i:i+16]) + ",")
+          out.append("};")
+          out.append("}\n#endif")
+          open(sys.argv[1] if len(sys.argv)>1 else "../core/nes_cpu_table.h","w").write("\n".join(out)+"\n")
+          VNES_EOF
+          mkdir -p symbian/tools
+          cat > symbian/tools/host_test.cpp <<'VNES_EOF'
+          // Host-side harness for the portable core (not part of the Symbian build).
+          //   host_test nestest <nestest.nes> <nestest.log>   - compare CPU trace
+          //   host_test run <rom.nes> <frames> <out.ppm>      - run frames, dump screen
+          #include "../core/nes.h"
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+
+          namespace nes {
+          void* PlatAlloc(u32 n) { return calloc(1, n ? n : 1); }
+          void PlatFree(void* p) { free(p); }
+          }
+
+          static unsigned char* Slurp(const char* path, unsigned* n) {
+              FILE* f = fopen(path, "rb");
+              if (!f) return 0;
+              fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+              unsigned char* b = (unsigned char*)malloc(sz);
+              if (fread(b, 1, sz, f) != (size_t)sz) { fclose(f); return 0; }
+              fclose(f);
+              *n = (unsigned)sz;
+              return b;
+          }
+
+          int main(int argc, char** argv) {
+              if (argc < 3) return 2;
+              unsigned n;
+              unsigned char* rom = Slurp(argv[2], &n);
+              if (!rom) { printf("cannot read %s\n", argv[2]); return 2; }
+              nes::Nes* m = new nes::Nes();
+              if (!m->Init() || !m->LoadRom(rom, n)) { printf("load failed: %s\n", m->LastError()); return 1; }
+
+              if (!strcmp(argv[1], "nestest")) {
+                  FILE* log = fopen(argv[3], "r");
+                  char line[256];
+                  m->pc_ = 0xC000; m->sp_ = 0xFD; m->SetP(0x24); m->cpuCycles_ = 7;
+                  int lineNo = 0;
+                  while (fgets(line, sizeof line, log)) {
+                      ++lineNo;
+                      unsigned pc, a, x, y, p, sp, cyc;
+                      if (sscanf(line, "%x", &pc) != 1) break;
+                      char* q;
+                      q = strstr(line, "A:"); sscanf(q, "A:%x X:%x Y:%x P:%x SP:%x", &a, &x, &y, &p, &sp);
+                      q = strstr(line, "CYC:"); sscanf(q, "CYC:%u", &cyc);
+                      unsigned mp = m->GetP(false);
+                      if (m->pc_ != pc || m->a_ != a || m->x_ != x || m->y_ != y || mp != p || m->sp_ != sp || m->cpuCycles_ != cyc) {
+                          printf("MISMATCH at log line %d\n  log : %.*s\n  mine: PC:%04X A:%02X X:%02X Y:%02X P:%02X SP:%02X CYC:%u\n",
+                                 lineNo, (int)strcspn(line, "\r\n"), line, m->pc_, m->a_, m->x_, m->y_, mp, m->sp_, m->cpuCycles_);
+                          return 1;
+                      }
+                      { unsigned c = m->CpuStep(); m->cpuCycles_ += c; }
+                      if (lineNo >= 8991) break;
+                  }
+                  printf("nestest: %d log lines matched. $0002=%02X $0003=%02X (00 = pass)\n", lineNo, m->Read(2), m->Read(3));
+                  return 0;
+              }
+
+              if (!strcmp(argv[1], "run")) {
+                  int frames = atoi(argv[3]);
+                  for (int i = 0; i < frames; ++i) {
+                      m->SetPad(0, 0);
+                      m->RunFrame(true);
+                      nes::s16 buf[1024]; m->ReadAudio(buf, 1024);
+                  }
+                  FILE* f = fopen(argv[4], "wb");
+                  fprintf(f, "P6\n256 240\n255\n");
+                  const nes::u32* fb = m->FrameBuffer();
+                  for (int i = 0; i < 256 * 240; ++i) { fputc((fb[i] >> 16) & 255, f); fputc((fb[i] >> 8) & 255, f); fputc(fb[i] & 255, f); }
+                  fclose(f);
+                  printf("ran %d frames, pc=%04X, mapper %d\n", frames, m->pc_, m->MapperId());
+                  // result byte convention of blargg tests: $6000
+                  printf("$6000=%02X text: %s\n", m->Read(0x6000), m->Read(0x6001) == 0xDE ? (const char*)(m->SaveRam() + 4) : "(n/a)");
+                  return 0;
+              }
+              return 2;
+          }
+          VNES_EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: port-src
+          path: symbian
+          include-hidden-files: true
+
+  host-test:
+    name: Core tests (host)
+    needs: sources
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: port-src
+          path: symbian
+      - name: Build core with strict C++98 flags
+        run: |
+          cd symbian
+          g++ -std=gnu++98 -O2 -Wall -Wextra -pedantic -fno-exceptions -fno-rtti \
+              -o /tmp/host_test tools/host_test.cpp core/*.cpp
+      - name: nestest CPU trace
+        run: |
+          curl -fsSL -o /tmp/nestest.nes https://raw.githubusercontent.com/christopherpow/nes-test-roms/master/other/nestest.nes
+          curl -fsSL -o /tmp/nestest.log https://raw.githubusercontent.com/christopherpow/nes-test-roms/master/other/nestest.log
+          /tmp/host_test nestest /tmp/nestest.nes /tmp/nestest.log
+
+  build-sis:
+    name: Build vnes.sisx
+    needs: sources
+    runs-on: macos-14
+    timeout-minutes: 360
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: port-src
+          path: symbian
+
+      - name: Check out symbian3-toolchain
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TOOLCHAIN_REPO }}
+          ref: ${{ env.TOOLCHAIN_REF }}
+          path: toolchain
+
+      - name: Create case-sensitive APFS volume
+        run: |
+          hdiutil create -size 24g -fs "Case-sensitive APFS" -volname Symbian -type SPARSE "$RUNNER_TEMP/symbian"
+          hdiutil attach "$RUNNER_TEMP/symbian.sparseimage" -mountpoint "$SYMBIAN_VOL"
+          sudo chown "$(id -u):$(id -g)" "$SYMBIAN_VOL"
+
+      - name: Install Homebrew dependencies and Rosetta
+        run: |
+          brew install perl openssl@3 unshield make gmp mpfr libmpc isl gnu-sed
+          sudo softwareupdate --install-rosetta --agree-to-license || true
+
+      - name: Restore toolchain cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /Volumes/Symbian/toolchain
+            /Volumes/Symbian/sdks
+            /Volumes/Symbian/gnupoc
+          key: symbian3-toolchain-${{ env.TOOLCHAIN_REF }}-${{ env.GNUPOC_COMMIT }}-${{ env.GCC4SYMBIAN_COMMIT }}
+
+      - name: Build toolchain and install SDK (cache miss)
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          JOBS: 4
+        run: |
+          set -eo pipefail
+          cd toolchain
+          source Scripts/env.sh
+          mkdir -p "$N8_SRC"
+          git clone https://github.com/mstorsjo/gnupoc-package "$N8_SRC/gnupoc-package"
+          git -C "$N8_SRC/gnupoc-package" checkout "$GNUPOC_COMMIT"
+          git clone https://github.com/fedor4ever/GCC4Symbian "$N8_SRC/GCC4Symbian"
+          git -C "$N8_SRC/GCC4Symbian" checkout "$GCC4SYMBIAN_COMMIT"
+          Scripts/fetch-sdk.sh
+          Scripts/build-host-tools.sh
+          Scripts/build-gcc.sh
+          Scripts/install-sdk.sh
+
+      - name: Save toolchain cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /Volumes/Symbian/toolchain
+            /Volumes/Symbian/sdks
+            /Volumes/Symbian/gnupoc
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      - name: Build vNES
+        run: |
+          set -eo pipefail
+          source toolchain/Scripts/env.sh
+          cd symbian/app/group
+          bldmake bldfiles
+          abld build gcce urel
+
+      - name: Package signed SIS
+        run: |
+          set -eo pipefail
+          source toolchain/Scripts/env.sh
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          "$N8_REPO/Scripts/package-sis.sh" symbian/app/sis/vnes.pkg "$GITHUB_WORKSPACE/dist"
+          ls -l "$GITHUB_WORKSPACE/dist"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vnes-symbian3
+          path: dist/vnes.sisx
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/vnes.sisx
