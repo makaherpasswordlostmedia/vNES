@@ -167,12 +167,13 @@ jobs:
           USERINCLUDE     ../../core
           APP_LAYER_SYSTEMINCLUDE
 
-          START RESOURCE  ../data/vnes.rss
+          SOURCEPATH      ../data
+          START RESOURCE  vnes.rss
           HEADER
           TARGETPATH      /resource/apps
           END
 
-          START RESOURCE  ../data/vnes_reg.rss
+          START RESOURCE  vnes_reg.rss
           TARGETPATH      /private/10003a3f/import/apps
           END
 
@@ -196,7 +197,7 @@ jobs:
           #include <f32file.h>
           #include <fbs.h>
           #include <badesca.h>
-          #include <MdaAudioOutputStream.h>
+          #include <mdaaudiooutputstream.h>
           #include "nes.h"
 
           const TUid KUidVNes = { 0xE1A5B0CD };
