@@ -50,13 +50,13 @@ jobs:
 
           `.github/workflows/symbian.yml` runs on a `macos-14` runner (the toolchain is Apple Silicon only):
           creates the case-sensitive volume, builds GCC 14.2 for `arm-none-symbianelf`, installs the Symbian^3 SDK,
-          runs `bldmake bldfiles && abld build gcce urel` and `package-sis.sh`, then uploads `vnes.sisx`.
+          runs `bldmake bldfiles && abld build -keepgoing gcce urel` and `package-sis.sh`, then uploads `vnes.sisx`.
           The first run takes ~2 h; the toolchain is cached afterwards. Tags `v*` attach the SIS to a release.
 
           Local build on an Apple Silicon Mac, after following the toolchain README:
 
               source symbian3-toolchain/Scripts/env.sh
-              cd symbian/app/group && bldmake bldfiles && abld build gcce urel
+              cd symbian/app/group && bldmake bldfiles && abld build -keepgoing gcce urel
               $N8_REPO/Scripts/package-sis.sh ../sis/vnes.pkg
 
           ## Using it
@@ -197,10 +197,11 @@ jobs:
           #include <f32file.h>
           #include <fbs.h>
           #include <badesca.h>
+          #include <mdaaudiosampleplayer.h>
           #include <mdaaudiooutputstream.h>
           #include "nes.h"
 
-          const TUid KUidVNes = { 0xE1A5B0CD };
+          const TUid KUidVNes = { (TInt32)0xE1A5B0CD };
 
           // ---------------------------------------------------------------------------
           // Audio: pushes 22.05 kHz mono PCM16 produced by the core to the MMF stream.
@@ -3550,7 +3551,7 @@ jobs:
           source toolchain/Scripts/env.sh
           cd symbian/app/group
           bldmake bldfiles
-          abld build gcce urel
+          abld build -keepgoing gcce urel
 
       - name: Package signed SIS
         run: |
