@@ -3500,6 +3500,9 @@ jobs:
       - name: Install Homebrew dependencies and Rosetta
         run: |
           brew install perl openssl@3 unshield make gmp mpfr libmpc isl gnu-sed
+          # install-sdk.sh requires perl to resolve to /opt/homebrew/opt/perl/bin/perl, not the linked
+          # /opt/homebrew/bin/perl symlink, so keep the keg unlinked (as on a stock Mac).
+          brew unlink perl
           sudo softwareupdate --install-rosetta --agree-to-license || true
 
       - name: Restore toolchain cache
